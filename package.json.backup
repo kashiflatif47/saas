@@ -1,0 +1,20 @@
+﻿{
+    "name":  "tablesaas",
+    "private":  true,
+    "description":  "Multi-tenant restaurant \u0026 hotel management SaaS (server + client)",
+    "scripts":  {
+                    "install:all":  "npm --prefix server install \u0026\u0026 npm --prefix client install",
+                    "dev:server":  "npm --prefix server run dev",
+                    "dev:client":  "npm --prefix client run dev",
+                    "seed":  "npm --prefix server run seed",
+                    "test":  "npm --prefix server test",
+                    "typecheck":  "npm --prefix server run typecheck \u0026\u0026 npm --prefix client run typecheck",
+                    "build":  "npm --prefix server run build \u0026\u0026 npm --prefix client run build"
+                },
+    "engines":  {
+                    "node":  "\u003e=20"
+                },
+    "devDependencies":  {
+                            "concurrently":  "^10.0.7"
+                        }
+}

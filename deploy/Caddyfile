@@ -1,0 +1,38 @@
+# Caddy with wildcard certificate via DNS-01 (build with: xcaddy build --with github.com/caddy-dns/cloudflare)
+# Set CLOUDFLARE_API_TOKEN in Caddy's environment. Replace example.com everywhere.
+{
+	email you@example.com
+}
+
+example.com, *.example.com {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+
+	encode zstd gzip
+
+	# API, websockets and uploads -> Node (Host header is preserved by default)
+	@api path /api/* /socket.io/* /uploads/*
+	handle @api {
+		reverse_proxy 127.0.0.1:4000
+	}
+
+	# SPA for every host (platform console on apex, storefront + dashboard on subdomains)
+	handle {
+		root * /srv/tablesaas/tablesaas/client/dist
+		try_files {path} /index.html
+		file_server
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		header /index.html Cache-Control "no-cache"
+		header /sw.js Cache-Control "no-cache"
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://js.stripe.com; frame-src https://js.stripe.com https://hooks.stripe.com; connect-src 'self' wss: https://api.stripe.com https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com"
+	}
+}

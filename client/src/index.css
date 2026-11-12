@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Platform defaults; restaurant pages override these at runtime from the tenant theme (applyTheme). */
+  --brand: 180 83 42;
+  --brand-ink: 255 255 255;
+  --accent: 233 180 76;
+  --store-bg: 255 250 243;
+  --store-surface: 255 255 255;
+  --store-text: 28 25 23;
+  --store-secondary: 28 22 18;
+  --store-secondary-ink: 255 255 255;
+  --radius: 14px;
+  --font-display: 'Fraunces';
+  --font-body: 'Inter';
+  color-scheme: light;
+}
+
+html { -webkit-tap-highlight-color: transparent; scroll-behavior: smooth; text-rendering: optimizeLegibility; }
+body { @apply bg-stone-50 text-stone-900 antialiased font-sans; font-feature-settings: 'cv11', 'ss01'; }
+::selection { background: rgb(var(--brand) / 0.18); }
+h1, h2, h3 { text-wrap: balance; }
+
+[dir='rtl'][lang='ur'] body, [dir='rtl'][lang='ur'] .font-sans { font-family: 'Noto Nastaliq Urdu', var(--font-body), serif; line-height: 1.9; }
+[dir='rtl'][lang='ar'] body, [dir='rtl'][lang='ar'] .font-sans { font-family: 'Noto Naskh Arabic', var(--font-body), serif; }
+
+@layer components {
+  .focus-ring { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white; }
+
+  /* ---------- Product UI (dashboards) ---------- */
+  .input {
+    @apply min-h-[44px] w-full rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-sm text-stone-900 shadow-[inset_0_1px_1px_rgb(28_25_23/0.03)]
+      placeholder:text-stone-400 transition duration-150
+      hover:border-stone-300 focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand/10
+      disabled:bg-stone-50 disabled:text-stone-500;
+  }
+  select.input { @apply cursor-pointer appearance-none bg-no-repeat pe-9; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%2378716c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-position: right 0.65rem center; }
+  [dir='rtl'] select.input { background-position: left 0.65rem center; }
+  .label { @apply mb-2 block text-[13px] font-medium text-stone-700; }
+  /* min-w-0: lets cards shrink inside CSS grid/flex tracks so wide content scrolls inside the card instead of widening the page */
+  .card { @apply min-w-0 rounded-2xl border border-stone-200/70 bg-white shadow-card; }
+  /* Layout grids with consistent gaps (spacing tokens in tailwind.config.js). */
+  .grid-stats { @apply grid gap-grid-gap sm:grid-cols-2 xl:grid-cols-4; }
+  .grid-modules { @apply grid gap-grid-gap sm:grid-cols-2 lg:grid-cols-3; }
+  .section-title { @apply text-section-title font-semibold text-stone-900; }
+  .card-hover { @apply transition duration-200 ease-out hover:-translate-y-0.5 hover:border-stone-300/80 hover:shadow-soft; }
+  .th { @apply whitespace-nowrap px-5 py-3.5 text-start text-xs font-semibold uppercase tracking-wide text-stone-500; }
+  .td { @apply px-5 py-4 text-sm text-stone-700; }
+  .eyebrow { @apply text-xs font-semibold uppercase tracking-eyebrow; }
+  .skeleton {
+    @apply animate-shimmer rounded-md;
+    background: linear-gradient(90deg, rgb(231 229 228 / 0.7) 0%, rgb(245 245 244) 50%, rgb(231 229 228 / 0.7) 100%);
+    background-size: 800px 100%;
+  }
+  .scrollbar-none { scrollbar-width: none; }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: rgb(120 113 108 / 0.35) transparent; }
+
+  /* ---------- Storefront (one layout for every restaurant; only the theme variables differ) ---------- */
+  .store-input {
+    @apply h-12 w-full min-w-0 rounded-brand-sm border border-store-text/10 bg-store-surface px-4 text-[15px] text-store-text outline-none transition
+      placeholder:text-store-text/45 focus:border-brand/60 focus:ring-4 focus:ring-brand/15;
+  }
+  .store-btn {
+    @apply inline-flex h-12 items-center justify-center gap-2 rounded-full bg-brand px-6 font-semibold text-brand-ink shadow-lift transition duration-200
+      hover:brightness-[1.06] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100;
+  }
+  .store-chip {
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-store-text/10 bg-store-surface/80 px-3.5 py-1.5 text-sm backdrop-blur;
+  }
+  .store-card { @apply rounded-brand-lg bg-store-surface shadow-card ring-1 ring-store-text/[0.06]; }
+}
+
+@layer utilities {
+  /* Scroll-reveal: elements start slightly lowered and fade in once visible (see useReveal). */
+  .reveal { opacity: 0; transform: translateY(14px); transition: opacity 600ms cubic-bezier(.2,.8,.2,1), transform 600ms cubic-bezier(.2,.8,.2,1); }
+  .reveal.is-visible { opacity: 1; transform: none; }
+  .stagger > * { animation: fade-up 420ms cubic-bezier(.2,.8,.2,1) both; }
+  .stagger > *:nth-child(2) { animation-delay: 40ms; }
+  .stagger > *:nth-child(3) { animation-delay: 80ms; }
+  .stagger > *:nth-child(4) { animation-delay: 120ms; }
+  .stagger > *:nth-child(5) { animation-delay: 160ms; }
+  .stagger > *:nth-child(n + 6) { animation-delay: 200ms; }
+  .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+@media print {
+  .no-print { display: none !important; }
+}
+
+/* Motion is decoration only: everything stays usable and visible with it off. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: 1ms !important; animation-delay: 0ms !important; transition-duration: 1ms !important; }
+  .reveal { opacity: 1; transform: none; }
+}

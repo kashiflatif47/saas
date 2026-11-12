@@ -1,0 +1,21 @@
+{
+  "name": "tablesaas",
+  "private": true,
+  "description": "Multi-tenant restaurant & hotel management SaaS (server + client)",
+  "scripts": {
+    "install:all": "npm --prefix server install && npm --prefix client install",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "seed": "npm --prefix server run seed",
+    "test": "npm --prefix server test",
+    "typecheck": "npm --prefix server run typecheck && npm --prefix client run typecheck",
+    "build": "npm --prefix server run build && npm --prefix client run build",
+    "dev": "concurrently --kill-others --names SERVER,CLIENT --prefix-colors cyan,magenta npm:dev:server npm:dev:client"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7"
+  }
+}

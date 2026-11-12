@@ -1,0 +1,14 @@
+# Never send secrets, dependencies, build output or local uploads into the image build context.
+**/node_modules
+**/dist
+**/dev-dist
+**/.env
+**/.env.*
+!**/.env.example
+**/uploads
+**/coverage
+**/*.log
+.git
+.vscode
+.idea
+package.json.backup

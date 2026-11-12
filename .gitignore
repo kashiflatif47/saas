@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dev-dist/
+.env
+.env.*
+!.env.example
+uploads/
+*.log
+.DS_Store
+coverage/
+
+package.json.backup
