@@ -5,10 +5,11 @@ const VERSION = 1;
 
 /**
  * IndexedDB store. One database per restaurant AND staff member:
- *  - each restaurant runs on its own origin (brost.example.com), and browsers never share IndexedDB between
- *    origins, so restaurant A's data cannot appear on restaurant B;
- *  - within an origin the database name includes the user id, so another employee signing in on the same
- *    device never sees the previous person's queue.
+ *  - the database name includes the tenant id, so path-based restaurants (example.com/r/a, example.com/r/b),
+ *    which share one origin, never open each other's data; subdomain restaurants are additionally separated by
+ *    the browser's per-origin storage;
+ *  - the name also includes the user id, so another employee signing in on the same device never sees the
+ *    previous person's queue.
  * Records are stored as plain objects; nothing in here is a credential (access tokens are never stored).
  */
 export function dbName(tenantId: string, userId: string) {

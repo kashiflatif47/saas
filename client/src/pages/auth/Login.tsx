@@ -5,11 +5,12 @@ import { useAuth } from '../../store/auth';
 import { api, assetUrl } from '../../api/client';
 import { applyTheme } from '../../lib/util';
 import { Button, Field, Input } from '../../components/ui';
+import TenantNotFound from '../store/TenantNotFound';
 
 interface TenantBrand { name: string; logoUrl?: string }
 
 const PLATFORM_POINTS = [
-  { icon: Store, text: 'Provision restaurants on their own subdomain in minutes' },
+  { icon: Store, text: 'Provision restaurants at their own web address in minutes' },
   { icon: BarChart3, text: 'Monitor orders, revenue and subscriptions across the network' },
   { icon: ShieldCheck, text: 'Strict tenant isolation with a full audit trail' },
 ];
@@ -28,8 +29,10 @@ export default function LoginPage({ tenantSlug }: { tenantSlug?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [brand, setBrand] = useState<TenantBrand | null>(null);
+  const [missing, setMissing] = useState(false);
 
-  // On a restaurant subdomain, show that restaurant's real name, logo and colours (public storefront data).
+  // On a restaurant page, show that restaurant's real name, logo and colours (public storefront data).
+  // An unknown restaurant gets the not-found page; a suspended/lapsed one (503) still shows the sign-in form.
   useEffect(() => {
     if (!tenantSlug) return;
     api
@@ -38,8 +41,13 @@ export default function LoginPage({ tenantSlug }: { tenantSlug?: string }) {
         setBrand({ name: s.name, logoUrl: s.branding?.logoUrl });
         applyTheme(s.branding?.theme);
       })
-      .catch(() => setBrand(null));
+      .catch((e) => {
+        setBrand(null);
+        if (e?.status === 404) setMissing(true);
+      });
   }, [tenantSlug]);
+
+  if (missing) return <TenantNotFound slug={tenantSlug} />;
 
   if (ready && user) {
     const next = params.get('next');

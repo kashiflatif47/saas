@@ -53,7 +53,7 @@ export function TenantDetailsCard({ tenant, onSaved }: { tenant: any; onSaved: (
             {BUSINESS_TYPES.map((b) => <option key={b} value={b}>{b.replace('_', ' ')}</option>)}
           </Select>
         </Field>
-        <Field label="Subdomain" hint="Fixed after provisioning (it is encoded in printed QR codes)"><Input value={tenant.slug} disabled /></Field>
+        <Field label="Restaurant URL name" hint="Fixed after provisioning (it is encoded in printed QR codes)"><Input value={tenant.slug} disabled /></Field>
         <Field label="Email"><Input type="email" value={f.email} onChange={(e) => set('email', e.target.value)} /></Field>
         <Field label="Phone"><Input value={f.phone} onChange={(e) => set('phone', e.target.value)} /></Field>
         <Field label="Address"><Input value={f.address} onChange={(e) => set('address', e.target.value)} /></Field>

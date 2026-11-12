@@ -4,6 +4,8 @@ dev-dist/
 .env
 .env.*
 !.env.example
+# Non-secret client build settings (VITE_ROOT_DOMAIN etc.), needed by the production build.
+!client/.env.production
 uploads/
 *.log
 .DS_Store

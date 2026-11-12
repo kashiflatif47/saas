@@ -20,6 +20,11 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const root = (env.VITE_ROOT_DOMAIN || 'localhost').toLowerCase();
   const apiTarget = env.VITE_DEV_API_TARGET || 'http://localhost:4000';
+  if (mode === 'production' && root === 'localhost') {
+    // With a localhost root, the real domain would be treated as a restaurant "custom domain" (storefront only):
+    // the platform console and every /r/<slug> page would be unreachable.
+    logger.warn('\n[tablesaas] WARNING: VITE_ROOT_DOMAIN is "localhost" in a production build. Set it to the real domain (client/.env.production).\n');
+  }
   return {
   customLogger: logger,
   plugins: [

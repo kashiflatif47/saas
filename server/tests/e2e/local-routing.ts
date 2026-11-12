@@ -1,6 +1,8 @@
 /**
- * Local multi-tenant subdomain routing check — runs against YOUR running `npm run dev`
+ * Local multi-tenant SUBDOMAIN routing check — runs against YOUR running `npm run dev`
  * (Vite on :5173 proxying to the API on :4000), exactly the way a browser on brost.localhost:5173 talks to it.
+ * Its URL assertions expect subdomain links: start the API with TENANT_URL_MODE=subdomain for this check.
+ * (The default path mode, localhost:5173/r/<slug>, is covered by tests/integration/pathTenancy.test.ts.)
  *
  *   cd server
  *   LOCAL_SA_EMAIL=you@example.com LOCAL_SA_PASSWORD='…' npm run test:local-routing

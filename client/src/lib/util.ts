@@ -1,40 +1,59 @@
 import { clsx, type ClassValue } from 'clsx';
+import { buildTenantUrl, isCustomDomain, lowercaseTenantPath, parseSiteContext, stripBasename, type SiteContext } from './site';
+
+export type { SiteContext } from './site';
+export { isTenantSlug } from './site';
 
 export const cn = (...v: ClassValue[]) => clsx(v);
 
 export const ROOT_DOMAIN = (import.meta.env.VITE_ROOT_DOMAIN as string | undefined) || 'localhost';
-// Must match server/src/lib/subdomain.ts RESERVED_SLUGS.
-const RESERVED = new Set([
-  'www', 'api', 'admin', 'app', 'static', 'cdn', 'assets', 'mail', 'smtp', 'ftp',
-  'dashboard', 'superadmin', 'status', 'docs', 'help', 'support', 'billing', 'ws', 'socket',
-]);
-
-/** Returns the tenant slug for the current hostname, or null for the platform (root/admin) site. */
-export function currentTenantSlug(hostname = window.location.hostname): string | null {
-  const host = hostname.toLowerCase();
-  const root = ROOT_DOMAIN.toLowerCase();
-  if (host === root || !host.endsWith(`.${root}`)) return null;
-  const sub = host.slice(0, -(root.length + 1));
-  if (!sub || sub.includes('.') || RESERVED.has(sub)) return null;
-  return sub;
-}
 
 /**
- * True when the page is served from a tenant's own custom domain (e.g. menu.restaurant.com):
- * any host that is neither the platform root nor one of its subdomains, nor a local address.
- * Custom domains serve the customer storefront only; staff sign in on <slug>.ROOT_DOMAIN.
+ * How NEW restaurant links are generated: `path` (default) = ROOT_DOMAIN/r/<slug>; `subdomain` = <slug>.ROOT_DOMAIN.
+ * Must match the server's TENANT_URL_MODE. Pages opened on a restaurant subdomain keep working in both modes.
  */
-export function isCustomDomainHost(hostname = window.location.hostname): boolean {
-  const host = hostname.toLowerCase();
-  const root = ROOT_DOMAIN.toLowerCase();
-  if (host === root || host.endsWith(`.${root}`)) return false;
-  if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return false;
-  return true;
+export const TENANT_URL_MODE: 'path' | 'subdomain' = import.meta.env.VITE_TENANT_URL_MODE === 'subdomain' ? 'subdomain' : 'path';
+
+/**
+ * Restaurant slugs are lowercase: rewrites `/r/Pizza/menu` to `/r/pizza/menu` in place (no reload) before the
+ * router starts. The server also redirects, but the service worker can serve the app shell without asking it.
+ */
+export function normalizeTenantPath() {
+  const { pathname, search, hash } = window.location;
+  const fixed = lowercaseTenantPath(pathname, search, hash);
+  if (fixed) window.history.replaceState(window.history.state, '', fixed);
 }
 
+let site: SiteContext | null = null;
+/** The current page's site context (see lib/site.ts). Computed once: the router basename never changes during a page's life. */
+export function siteContext(): SiteContext {
+  return (site ??= parseSiteContext(window.location.hostname, window.location.pathname, ROOT_DOMAIN));
+}
+
+/** Returns the tenant slug of the current page (path or subdomain restaurant), or null for the platform. */
+export function currentTenantSlug(): string | null {
+  return siteContext().slug;
+}
+
+/** The current location relative to the router basename (`/r/pizza/dashboard` -> `/dashboard`). */
+export function routerPathname(): string {
+  return stripBasename(window.location.pathname, siteContext().basename);
+}
+
+/** True when the page is served from a tenant's own custom domain (storefront only). */
+export function isCustomDomainHost(hostname = window.location.hostname): boolean {
+  return isCustomDomain(hostname, ROOT_DOMAIN);
+}
+
+/** Absolute URL of a restaurant page: `https://example.com/r/pizza/…` (path mode) or `https://pizza.example.com/…`. */
 export function tenantUrl(slug: string, path = '/') {
   const { protocol, port } = window.location;
-  return `${protocol}//${slug}.${ROOT_DOMAIN}${port ? `:${port}` : ''}${path}`;
+  return buildTenantUrl(TENANT_URL_MODE, protocol, ROOT_DOMAIN, port, slug, path);
+}
+
+/** Human-readable restaurant address without protocol, for hints: `example.com/r/pizza`. */
+export function tenantAddressPreview(slug: string) {
+  return TENANT_URL_MODE === 'subdomain' ? `${slug}.${ROOT_DOMAIN}` : `${ROOT_DOMAIN}/r/${slug}`;
 }
 
 export function platformUrl(path = '/') {

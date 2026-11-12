@@ -12,7 +12,9 @@ import { corsOriginCheck } from './app.cors';
 import { errorHandler, notFoundHandler } from './middleware/error';
 import { sanitizeInput, validateQuery, zPage } from './middleware/validate';
 import { authenticate, requireSuperAdmin, can } from './middleware/auth';
-import { requireActiveSubscription, requireStaffTenant, resolvePublicTenant } from './middleware/tenant';
+import { requireActiveSubscription, requireStaffTenant, resolvePublicTenant, resolvePublicTenantFromPath } from './middleware/tenant';
+import { tenantSlugFromPath } from './lib/subdomain';
+import { resolveTenantBySlug } from './services/tenantResolver';
 import { authRouter } from './routes/auth';
 import { superAdminRouter } from './routes/superadmin';
 import { tenantAdminRouter } from './routes/tenantAdmin';
@@ -107,7 +109,11 @@ export function createApp() {
   /* Platform (super admin) */
   app.use('/api/platform', authenticate, requireSuperAdmin, superAdminRouter);
 
-  /* Public storefront — tenant from Host header */
+  /* Public storefront — tenant from the URL path (ROOT_DOMAIN/r/<slug> pages). Mounted first so it can never
+     fall through to host-based resolution; an unknown path under it is a plain 404. */
+  app.use('/api/public/tenants/:slug', resolvePublicTenantFromPath, publicRouter);
+  app.use('/api/public/tenants', notFoundHandler);
+  /* Public storefront — tenant from Host header (restaurant subdomains and custom domains) */
   app.use('/api/public', resolvePublicTenant, publicRouter);
 
   /* Tenant staff API — tenant from JWT; writes blocked when subscription lapsed */
@@ -159,10 +165,34 @@ export function createApp() {
         },
       }),
     );
-    app.get(/^\/(?!api\/|socket\.io\/|uploads\/).*/, (_req, res) => {
+    // Installable app (PWA) per path-based restaurant: same manifest as the platform, but it opens and is
+    // identified at /r/<slug>/, so a POS tablet installed from a restaurant opens that restaurant (subdomain
+    // restaurants got this for free from their own origin).
+    const manifestFile = path.join(dist, 'manifest.webmanifest');
+    app.get('/r/:slug/manifest.webmanifest', ah(async (req, res) => {
+      const slug = tenantSlugFromPath(`/r/${req.params.slug}`);
+      const tenant = slug ? await resolveTenantBySlug(slug) : null;
+      if (!slug || !tenant || !fs.existsSync(manifestFile)) return void res.status(404).end();
+      const base = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
       res.setHeader('Cache-Control', 'no-cache');
+      res.type('application/manifest+json').send(JSON.stringify({ ...base, id: `/r/${slug}/`, start_url: `/r/${slug}/`, scope: '/', name: `${tenant.name} — TableSaaS`, short_name: tenant.name.slice(0, 30) }));
+    }));
+    app.get(/^\/(?!api\/|socket\.io\/|uploads\/).*/, ah(async (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache');
+      // Restaurant pages (/r/<slug>/…): the SPA renders its own "restaurant not found" page, but the HTTP status
+      // must say 404 too (search engines, monitors). Suspended/lapsed restaurants still get 200: the app shows
+      // "temporarily unavailable" and their staff must still be able to sign in.
+      if (/^\/r(\/|$)/.test(req.path)) {
+        // Slugs are lowercase: /r/Hahha/menu -> /r/hahha/menu (query string kept).
+        const seg = /^\/r\/([^/]+)/.exec(req.path)?.[1];
+        if (seg && seg !== seg.toLowerCase() && tenantSlugFromPath(`/r/${seg.toLowerCase()}`)) {
+          return res.redirect(301, req.originalUrl.replace(`/r/${seg}`, `/r/${seg.toLowerCase()}`));
+        }
+        const slug = tenantSlugFromPath(req.path);
+        if (!slug || !(await resolveTenantBySlug(slug))) res.status(404);
+      }
       res.sendFile(indexHtml);
-    });
+    }));
   }
 
   app.use(errorHandler);

@@ -39,6 +39,13 @@ const schema = z.object({
    * a reverse proxy (Nginx/Caddy) serves client/dist itself.
    */
   CLIENT_DIST_DIR: z.string().default(''),
+  /**
+   * How restaurant URLs are generated (links, QR codes, unsubscribe links):
+   *  - `path` (default): https://ROOT_DOMAIN/r/<slug> — one domain, no DNS or hosting setup per restaurant;
+   *  - `subdomain`: https://<slug>.ROOT_DOMAIN — needs wildcard DNS + a host that routes every subdomain here.
+   * Requests that arrive on a restaurant subdomain or custom domain are still served in both modes.
+   */
+  TENANT_URL_MODE: z.enum(['path', 'subdomain']).default('path'),
   /** Request access log (method, path, status, duration — never bodies or headers). */
   LOG_REQUESTS: z
     .string()

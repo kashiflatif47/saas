@@ -158,6 +158,9 @@ async function startLocal() {
       PORT: String(PORT),
       MONGODB_URI: mongod.getUri('tablesaas-e2e'),
       ROOT_DOMAIN: ROOT,
+      // This journey exercises the subdomain mode (<slug>.ROOT_DOMAIN). Path mode (ROOT_DOMAIN/r/<slug>, the
+      // default) is covered by tests/integration/pathTenancy.test.ts.
+      TENANT_URL_MODE: 'subdomain',
       APP_PROTOCOL: 'http',
       CLIENT_ORIGIN: `http://${ROOT}:${PORT}`,
       PUBLIC_API_URL: `http://${ROOT}:${PORT}`,

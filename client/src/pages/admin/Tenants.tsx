@@ -5,6 +5,7 @@ import { api, qs } from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { Button, Card, DataTable, ErrorState, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, useFeedback } from '../../components/ui';
 import { slugify } from './slug';
+import { tenantAddressPreview } from '../../lib/util';
 import { Building2 as HeaderIcon } from 'lucide-react';
 
 export default function AdminTenants() {
@@ -61,7 +62,7 @@ export default function AdminTenants() {
         <div className="flex flex-wrap gap-3 border-b border-stone-100 p-4">
           <div className="relative min-w-[220px] flex-1">
             <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
-            <Input className="ps-9" placeholder="Search name or subdomain" value={q} onChange={(e) => setQ(e.target.value)} />
+            <Input className="ps-9" placeholder="Search name or URL" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
           <Select className="w-auto" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} aria-label="Status">
             <option value="">All statuses</option>
@@ -87,7 +88,7 @@ export default function AdminTenants() {
               rows={data.items}
               onRowClick={(r: any) => nav(`/admin/tenants/${r._id}`)}
               columns={[
-                { key: 'name', header: 'Restaurant', render: (r: any) => <div><p className="font-medium text-stone-900">{r.name}</p><p className="text-xs text-stone-400">{r.slug} · {r.businessType}</p></div> },
+                { key: 'name', header: 'Restaurant', render: (r: any) => <div><p className="font-medium text-stone-900">{r.name}</p><p className="text-xs text-stone-400">{r.url ?? r.slug} · {r.businessType}</p></div> },
                 { key: 'plan', header: 'Plan', render: (r: any) => r.subscription?.planId?.name ?? '—' },
                 { key: 'sub', header: 'Subscription', render: (r: any) => <StatusBadge status={r.subscription?.status ?? 'none'} /> },
                 { key: 'status', header: 'Account', render: (r: any) => <StatusBadge status={r.status} /> },
@@ -120,7 +121,7 @@ export default function AdminTenants() {
         )}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Business name *"><Input value={form.name} onChange={(e) => set('name', e.target.value)} /></Field>
-          <Field label="Subdomain *" hint={form.slug ? `${form.slug}.${import.meta.env.VITE_ROOT_DOMAIN || 'localhost'}` : 'Lowercase letters, numbers, hyphens'}>
+          <Field label="Restaurant URL *" hint={form.slug ? tenantAddressPreview(form.slug) : 'Lowercase letters, numbers, hyphens'}>
             <Input value={form.slug} onChange={(e) => { setSlugTouched(true); set('slug', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '')); }} />
           </Field>
           <Field label="Business type">

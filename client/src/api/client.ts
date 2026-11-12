@@ -1,6 +1,26 @@
-import { downloadBlob } from '../lib/util';
+import { downloadBlob, siteContext } from '../lib/util';
+import { authEndpointFor, publicApiPath } from '../lib/site';
 
 export const API_URL = ((import.meta.env.VITE_API_URL as string | undefined) || '').replace(/\/$/, '');
+
+/**
+ * Headers that tell the API which site the page belongs to.
+ *  - X-Tenant-Host: the page host (restaurant subdomains / custom domains; validated server-side).
+ *  - X-Tenant-Context: on path-based restaurant pages (/r/<slug>), the restaurant in the URL. The server only
+ *    uses it to REFUSE staff requests whose signed-in restaurant differs; it never grants access.
+ */
+export function siteHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'X-Tenant-Host': window.location.host };
+  const site = siteContext();
+  if (site.kind === 'path') h['X-Tenant-Context'] = site.slug;
+  return h;
+}
+
+/** `/api/public/<x>` -> `/api/public/tenants/<slug>/<x>` on path-based restaurant pages (see lib/site.ts). */
+export const apiPath = (path: string) => publicApiPath(siteContext(), path);
+
+/** This site's login/refresh/logout endpoint (path-based restaurants have their own, see lib/site.ts). */
+export const authEndpoint = (action: 'login' | 'refresh' | 'logout') => authEndpointFor(siteContext(), action);
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public code?: string, public details?: any) {
@@ -26,7 +46,7 @@ export const session = {
 
 async function refresh(): Promise<boolean> {
   if (!refreshing) {
-    refreshing = fetch(`${API_URL}/api/auth/refresh`, { method: 'POST', credentials: 'include', headers: { 'X-Tenant-Host': window.location.host } })
+    refreshing = fetch(`${API_URL}${authEndpoint('refresh')}`, { method: 'POST', credentials: 'include', headers: siteHeaders() })
       .then(async (r) => {
         if (!r.ok || r.status === 204) return false;
         const j = await r.json();
@@ -56,7 +76,7 @@ export function isNetworkFailure(e: unknown): boolean {
 export async function refreshSession(): Promise<any | null> {
   let r: Response;
   try {
-    r = await fetch(`${API_URL}/api/auth/refresh`, { method: 'POST', credentials: 'include', headers: { 'X-Tenant-Host': window.location.host } });
+    r = await fetch(`${API_URL}${authEndpoint('refresh')}`, { method: 'POST', credentials: 'include', headers: siteHeaders() });
   } catch {
     throw new ApiError(0, 'No connection to the server', 'NETWORK');
   }
@@ -73,12 +93,12 @@ export async function refreshSession(): Promise<any | null> {
 type Opts = { method?: string; body?: unknown; raw?: boolean; form?: FormData; signal?: AbortSignal; retry?: boolean };
 
 export async function request<T = any>(path: string, opts: Opts = {}): Promise<T> {
-  const headers: Record<string, string> = { 'X-Tenant-Host': window.location.host };
+  const headers = siteHeaders();
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   let res: Response;
   try {
-    res = await fetch(`${API_URL}${path}`, {
+    res = await fetch(`${API_URL}${apiPath(path)}`, {
       method: opts.method ?? 'GET',
       headers,
       credentials: 'include',

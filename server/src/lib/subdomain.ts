@@ -23,6 +23,22 @@ export function slugify(input: string): string {
 }
 
 /**
+ * Validates a tenant slug taken from a URL PATH (`/r/<slug>`, `/api/public/tenants/<slug>`).
+ * Accepts only lowercase slug syntax (never a hostname, dots, percent-escapes or reserved words), so the
+ * value is safe to use as a DB lookup key and inside a cookie path. Selecting a tenant this way only ever
+ * grants PUBLIC storefront context; staff authorization always comes from the verified JWT.
+ */
+export function isPathSlug(slug: unknown): slug is string {
+  return typeof slug === 'string' && SLUG_RE.test(slug) && !RESERVED_SLUGS.has(slug);
+}
+
+/** `/r/pizza/dashboard` -> `pizza`; anything else (including `/r/Pizza.com`) -> null. */
+export function tenantSlugFromPath(pathname: string | undefined): string | null {
+  const m = /^\/r\/([^/?#]+)(?:[/?#]|$)/.exec(pathname ?? '');
+  return m && isPathSlug(m[1]) ? m[1] : null;
+}
+
+/**
  * Extracts the tenant slug from a Host header.
  * `pizza.example.com` with root `example.com` -> `pizza`
  * `example.com`, `www.example.com`, foreign hosts, nested subdomains -> null

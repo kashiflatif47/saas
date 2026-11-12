@@ -13,6 +13,7 @@ import OrderTracking from './OrderTracking';
 import Reserve from './Reserve';
 
 import Unsubscribe from './Unsubscribe';
+import TenantNotFound from './TenantNotFound';
 
 export interface StoreInfo {
   name: string;
@@ -48,6 +49,7 @@ export default function Storefront({ slug }: { slug: string }) {
       .catch((e) => setErr({ status: e.status, message: e.message }));
   }, []);
 
+  if (err?.status === 404) return <TenantNotFound slug={slug} />;
   if (err)
     return (
       <div className="flex min-h-screen flex-col items-center justify-center p-8 text-center">

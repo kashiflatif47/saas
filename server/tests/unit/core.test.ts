@@ -2,7 +2,7 @@ import '../env';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { tenantSlugFromHost, isValidSlug, slugify } from '../../src/lib/subdomain';
+import { tenantSlugFromHost, isValidSlug, slugify, tenantSlugFromPath, isPathSlug } from '../../src/lib/subdomain';
 import { canTransition, deriveOrderStatus, derivePaymentStatus, canTransitionItem } from '../../src/lib/orderState';
 import { encryptSecret, decryptSecret, verifyStripeSignature, sniffImageType } from '../../src/lib/crypto';
 import { toCsv } from '../../src/lib/csv';
@@ -113,7 +113,7 @@ test('role permissions and overrides', () => {
 });
 
 /* ---------- production hardening ---------- */
-import { productionProblems, type Env } from '../../src/config/env';
+import { productionProblems, env, type Env } from '../../src/config/env';
 import { subscriptionAllowsOperation, GRACE_DAYS } from '../../src/services/tenantResolver';
 
 test('production config guard rejects placeholders, header tenancy, http and localhost', () => {
@@ -147,19 +147,64 @@ test('subscription access honours the past-due grace window consistently', () =>
 });
 
 /* ---------- local subdomain URLs ---------- */
-import { publicPort, tenantAppUrl, platformAppUrl, tableUrl } from '../../src/lib/appUrl';
+import { publicPort, tenantAppUrl, platformAppUrl, tableUrl, tenantLoginUrl } from '../../src/lib/appUrl';
 
-test('restaurant URLs and QR links carry the port the browser is using (dev), never a foreign host', () => {
-  const req = (h: Record<string, string>) => ({ get: (k: string) => h[k.toLowerCase()] }) as any;
-  // tests/env.ts: ROOT_DOMAIN=test.local, APP_PROTOCOL defaults to http, NODE_ENV=test (not production)
-  assert.equal(tenantAppUrl('brost', req({ host: 'test.local:5173' })), 'http://brost.test.local:5173');
-  assert.equal(tenantAppUrl('brost', req({ host: 'brost.test.local:5173', 'x-tenant-host': 'brost.test.local:5173' })), 'http://brost.test.local:5173');
+const fakeReq = (h: Record<string, string>) => ({ get: (k: string) => h[k.toLowerCase()] }) as any;
+
+test('restaurant URLs and QR links are path-based by default and carry the browser port (dev), never a foreign host', () => {
+  const req = fakeReq;
+  // tests/env.ts: ROOT_DOMAIN=test.local, APP_PROTOCOL defaults to http, NODE_ENV=test, TENANT_URL_MODE default (path)
+  assert.equal(env.TENANT_URL_MODE, 'path');
+  assert.equal(tenantAppUrl('brost', req({ host: 'test.local:5173' })), 'http://test.local:5173/r/brost');
+  assert.equal(tenantAppUrl('brost', req({ host: 'brost.test.local:5173', 'x-tenant-host': 'brost.test.local:5173' })), 'http://test.local:5173/r/brost');
   assert.equal(platformAppUrl(req({ host: 'test.local:4000' })), 'http://test.local:4000', 'single-service mode');
-  assert.equal(tableUrl('brost', 'tok123', req({ host: 'brost.test.local:5173' })), 'http://brost.test.local:5173/t/tok123');
+  assert.equal(tableUrl('brost', 'tok123', req({ host: 'test.local:5173' })), 'http://test.local:5173/r/brost/t/tok123');
+  assert.equal(tenantLoginUrl('brost'), 'http://test.local/r/brost/login');
   // Foreign or malformed hosts never contribute anything.
   assert.equal(publicPort(req({ host: 'attacker.example:9999' })), '');
   assert.equal(publicPort(req({ host: 'test.local:5173/evil' })), '');
   assert.equal(publicPort(req({ host: 'test.local' })), '');
-  assert.equal(tenantAppUrl('brost', req({ host: 'test.local:80' })), 'http://brost.test.local', 'default port omitted');
-  assert.equal(tenantAppUrl('brost'), 'http://brost.test.local', 'no request → no port');
+  assert.equal(tenantAppUrl('brost', req({ host: 'test.local:80' })), 'http://test.local/r/brost', 'default port omitted');
+  assert.equal(tenantAppUrl('brost'), 'http://test.local/r/brost', 'no request → no port');
+  assert.equal(tenantAppUrl('brost', req({ host: 'attacker.example:9999' })), 'http://test.local/r/brost');
+});
+
+test('TENANT_URL_MODE=subdomain still generates <slug>.ROOT_DOMAIN links', () => {
+  const prev = env.TENANT_URL_MODE;
+  (env as any).TENANT_URL_MODE = 'subdomain';
+  try {
+    assert.equal(tenantAppUrl('brost', fakeReq({ host: 'test.local:5173' })), 'http://brost.test.local:5173');
+    assert.equal(tableUrl('brost', 'tok123', fakeReq({ host: 'brost.test.local:5173' })), 'http://brost.test.local:5173/t/tok123');
+    assert.equal(tenantAppUrl('brost'), 'http://brost.test.local');
+  } finally {
+    (env as any).TENANT_URL_MODE = prev;
+  }
+});
+
+test('production path URLs: https://ROOT_DOMAIN/r/<slug>, no port', () => {
+  const prev = { ...env };
+  Object.assign(env as any, { ROOT_DOMAIN: 'nftloyal.shop', APP_PROTOCOL: 'https', APP_PUBLIC_PORT: '' });
+  try {
+    assert.equal(tenantAppUrl('hahha'), 'https://nftloyal.shop/r/hahha');
+    assert.equal(tableUrl('hahha', 'Qr_Tok-123'), 'https://nftloyal.shop/r/hahha/t/Qr_Tok-123');
+    assert.equal(tenantLoginUrl('pizza'), 'https://nftloyal.shop/r/pizza/login');
+    assert.equal(platformAppUrl(), 'https://nftloyal.shop');
+  } finally {
+    Object.assign(env as any, prev);
+  }
+});
+
+test('restaurant slug from a URL path: strict slug syntax only, never a hostname', () => {
+  assert.equal(tenantSlugFromPath('/r/hahha'), 'hahha');
+  assert.equal(tenantSlugFromPath('/r/hahha/'), 'hahha');
+  assert.equal(tenantSlugFromPath('/r/spice-garden/dashboard/orders'), 'spice-garden');
+  assert.equal(tenantSlugFromPath('/r/pizza?x=1'), 'pizza');
+  for (const p of ['/', '/admin', '/reserve', '/r', '/r/', '/r//x', '/r/Hahha', '/r/hahha.nftloyal.shop', '/r/nftloyal.shop', '/r/admin', '/r/www', '/r/a', '/r/-ab', '/r/ab-', '/r/%68ahha', '/x/r/hahha', undefined]) {
+    assert.equal(tenantSlugFromPath(p as any), null, String(p));
+  }
+  assert.equal(isPathSlug('pizza'), true);
+  assert.equal(isPathSlug('PIZZA'), false);
+  assert.equal(isPathSlug('pizza.com'), false);
+  assert.equal(isPathSlug('dashboard'), false);
+  assert.equal(isPathSlug(42 as any), false);
 });

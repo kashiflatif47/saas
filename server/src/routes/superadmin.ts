@@ -13,7 +13,7 @@ import { invalidateTenantCache } from '../services/tenantResolver';
 import { FEATURES } from '../config/permissions';
 import { env } from '../config/env';
 import { invalidateCustomDomainCache } from '../app.cors';
-import { tenantAppUrl } from '../lib/appUrl';
+import { tenantAppUrl, tenantLoginUrl } from '../lib/appUrl';
 import { disconnectTenantStaffSockets, disconnectUserSockets } from '../sockets';
 
 import { isValidTimeZone } from '../lib/timezone';
@@ -67,7 +67,7 @@ superAdminRouter.get('/tenants', validateQuery(zPage.extend({ status: z.string()
     Tenant.find(filter).populate('subscription.planId', 'name code').sort({ createdAt: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(),
     Tenant.countDocuments(filter),
   ]);
-  res.json({ items, total, page: q.page, limit: q.limit });
+  res.json({ items: items.map((t) => ({ ...t, url: tenantAppUrl(t.slug, req) })), total, page: q.page, limit: q.limit });
 }));
 
 superAdminRouter.get('/tenants/:id', checkIdParams, ah(async (req, res) => {
@@ -82,15 +82,15 @@ superAdminRouter.get('/tenants/:id', checkIdParams, ah(async (req, res) => {
     Order.aggregate([{ $match: { tenantId, createdAt: { $gte: since } } }, { $group: { _id: null, count: { $sum: 1 }, gmv: { $sum: '$total' } } }]),
     User.findOne({ tenantId, role: 'owner' }).select('name email lastLoginAt').lean(),
   ]);
-  res.json({ tenant: t, usage: { staff, products, tables, orders30: orders30[0]?.count ?? 0, gmv30: orders30[0]?.gmv ?? 0 }, owner, url: tenantAppUrl(t.slug, req) });
+  res.json({ tenant: t, usage: { staff, products, tables, orders30: orders30[0]?.count ?? 0, gmv30: orders30[0]?.gmv ?? 0 }, owner, url: tenantAppUrl(t.slug, req), loginUrl: tenantLoginUrl(t.slug, req) });
 }));
 
 /** Provisions a tenant: tenant record + owner account + default kitchen station + trial subscription. */
 superAdminRouter.post('/tenants', validateBody(createTenantSchema), ah(async (req, res) => {
   const b = req.body;
   const slug = (b.slug ? b.slug.toLowerCase() : slugify(b.name));
-  if (!isValidSlug(slug)) throw badRequest('Subdomain must be 3–40 chars of a–z, 0–9 and hyphens, and not reserved');
-  if (await Tenant.exists({ slug })) throw conflict('That subdomain is already taken');
+  if (!isValidSlug(slug)) throw badRequest('Restaurant URL name (slug) must be 3–40 chars of a–z, 0–9 and hyphens, and not reserved');
+  if (await Tenant.exists({ slug })) throw conflict('That restaurant URL name is already taken');
   const plan = await Plan.findById(b.planId).lean();
   if (!plan || !plan.isActive) throw badRequest('Plan not found or inactive');
 
@@ -117,7 +117,7 @@ superAdminRouter.post('/tenants', validateBody(createTenantSchema), ah(async (re
     throw e;
   }
   await audit(req, 'tenant.provision', 'Tenant', tenant._id, { slug, plan: plan.code }, null);
-  res.status(201).json({ tenant, url: tenantAppUrl(slug, req) });
+  res.status(201).json({ tenant, url: tenantAppUrl(slug, req), loginUrl: tenantLoginUrl(slug, req) });
 }));
 
 superAdminRouter.patch('/tenants/:id', checkIdParams, validateBody(z.object({
@@ -142,7 +142,7 @@ superAdminRouter.patch('/tenants/:id', checkIdParams, validateBody(z.object({
   else if (customDomain) {
     const d = customDomain.toLowerCase();
     const root = env.ROOT_DOMAIN.toLowerCase();
-    if (d === root || d.endsWith(`.${root}`)) throw badRequest('Use the built-in subdomain instead of a custom domain under the platform domain');
+    if (d === root || d.endsWith(`.${root}`)) throw badRequest('Use the built-in restaurant address instead of a custom domain under the platform domain');
     set.customDomain = d;
   }
   const t = await Tenant.findByIdAndUpdate(req.params.id, { ...(Object.keys(set).length ? { $set: set } : {}), ...(Object.keys(unset).length ? { $unset: unset } : {}) }, { new: true, runValidators: true });

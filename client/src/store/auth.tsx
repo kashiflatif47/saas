@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api, isNetworkFailure, refreshSession, session } from '../api/client';
+import { api, authEndpoint, isNetworkFailure, refreshSession, session } from '../api/client';
 import { clearSessionCache, loadSessionCache, saveSessionCache } from '../offline/browser';
-import { applyTheme, currentTenantSlug } from '../lib/util';
+import { applyTheme, routerPathname, siteContext } from '../lib/util';
+import { sessionBelongsToSite } from '../lib/site';
 
 export interface SessionUser {
   id: string;
@@ -55,7 +56,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [permissions, setPermissions] = useState<string[]>([]);
   const [offlineSession, setOfflineSession] = useState(false);
 
+  /** Applies a session payload; returns false (and applies nothing) when it is not for this site's restaurant. */
   const apply = useCallback((j: any, fromCache = false) => {
+    if (!sessionBelongsToSite(siteContext(), j)) return false;
     setUser(j.user);
     setTenant(j.tenant);
     setPermissions(j.permissions ?? []);
@@ -63,6 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (j.tenant?.branding?.theme) applyTheme(j.tenant.branding.theme);
     // Restaurant staff only: remember the session (never the tokens) for refreshes while offline.
     if (!fromCache && j.user?.tenantId) void saveSessionCache(j);
+    return true;
   }, []);
 
   useEffect(() => {
@@ -73,13 +77,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setPermissions([]);
     });
     // Only staff/admin pages can have a session; customer storefront pages skip the probe entirely.
-    const needsSession = !currentTenantSlug() || /^\/(login|dashboard|admin)(\/|$)/.test(window.location.pathname);
+    // Paths are relative to the router basename (/r/<slug>/dashboard -> /dashboard).
+    const needsSession = siteContext().kind === 'platform' || /^\/(login|dashboard|admin)(\/|$)/.test(routerPathname());
     if (!needsSession) {
       setReady(true);
       return;
     }
     refreshSession()
-      .then((j) => j && apply(j))
+      .then((j) => {
+        if (j && !apply(j)) session.set(null); // not this site's session: never keep its token
+      })
       .catch(async (e) => {
         // Server unreachable: continue with this device's cached session (offline mode), if recent enough.
         if (!isNetworkFailure(e)) return;
@@ -91,9 +98,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (email: string, password: string, tenantSlug?: string) => {
-      const j = await api.post('/api/auth/login', { email, password, tenantSlug });
+      // Path-based restaurants sign in at /api/auth/tenants/<slug>/login (the slug comes from the URL).
+      const site = siteContext();
+      const j = await api.post(authEndpoint('login'), site.kind === 'path' ? { email, password } : { email, password, tenantSlug });
       session.set(j.accessToken);
-      apply(j);
+      if (!apply(j)) {
+        session.set(null);
+        await api.post(authEndpoint('logout')).catch(() => undefined);
+        throw new Error('This account cannot sign in here');
+      }
     },
     [apply],
   );
@@ -101,11 +114,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const resumeOnline = useCallback(async () => {
     try {
       const j = await refreshSession();
-      if (j) {
-        apply(j);
-        return true;
-      }
+      if (j && apply(j)) return true;
       // The server answered: this session is over (expired or revoked). Queued work stays on the device.
+      session.set(null);
       await clearSessionCache();
       setUser(null);
       setTenant(null);
@@ -120,7 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     if (user) for (const h of logoutHooks) await Promise.resolve(h({ tenantId: user.tenantId, userId: user.id })).catch(() => undefined);
     await clearSessionCache();
-    await api.post('/api/auth/logout').catch(() => undefined);
+    await api.post(authEndpoint('logout')).catch(() => undefined); // ends THIS site's session only
     session.set(null);
     setUser(null);
     setTenant(null);
@@ -128,7 +139,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOfflineSession(false);
   }, [user]);
 
-  const refreshMe = useCallback(async () => apply(await api.get('/api/auth/me')), [apply]);
+  const refreshMe = useCallback(async () => {
+    apply(await api.get('/api/auth/me'));
+  }, [apply]);
 
   const can = useCallback((...p: string[]) => p.some((x) => permissions.includes(x)), [permissions]);
   const hasFeature = useCallback((f: string) => !!tenant?.features?.includes(f), [tenant]);

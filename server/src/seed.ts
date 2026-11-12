@@ -111,7 +111,9 @@ async function main() {
 
   console.info('Seed complete.');
   console.info(`  Super admin:  ${sa === 'created' ? `created ${env.SUPERADMIN_EMAIL}` : sa === 'exists' ? 'already exists (unchanged)' : 'not created'}`);
-  console.info(`  Demo tenant:  ${env.APP_PROTOCOL}://spice-garden.${env.ROOT_DOMAIN}${env.APP_PUBLIC_PORT ? `:${env.APP_PUBLIC_PORT}` : env.NODE_ENV === 'development' ? ':5173' : ''}`);
+  const demoPort = env.APP_PUBLIC_PORT ? `:${env.APP_PUBLIC_PORT}` : env.NODE_ENV === 'development' ? ':5173' : '';
+  const demoHost = env.TENANT_URL_MODE === 'subdomain' ? `spice-garden.${env.ROOT_DOMAIN}${demoPort}` : `${env.ROOT_DOMAIN}${demoPort}/r/spice-garden`;
+  console.info(`  Demo tenant:  ${env.APP_PROTOCOL}://${demoHost}`);
   console.info('  Staff logins: owner@ / manager@ / waiter@ / cashier@ / kitchen@ / inventory@spicegarden.example  (password = SEED_PASSWORD)');
   await mongoose.disconnect();
 }

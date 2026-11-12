@@ -1,4 +1,6 @@
-import { API_URL, refreshAccessToken, session } from '../api/client';
+import { API_URL, refreshAccessToken, session, siteHeaders } from '../api/client';
+import { siteContext } from '../lib/util';
+import { sessionCacheSlot } from '../lib/site';
 import { NetworkError, type Transport } from './types';
 
 /** Stable per-browser device id (not a secret; identifies which till recorded an operation). */
@@ -19,7 +21,7 @@ export function deviceId(): string {
 }
 
 async function post(body: unknown, timeoutMs: number) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Tenant-Host': window.location.host };
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...siteHeaders() };
   if (session.token) headers.Authorization = `Bearer ${session.token}`;
   try {
     return await fetch(`${API_URL}/api/staff/sync`, { method: 'POST', headers, credentials: 'include', body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
@@ -59,14 +61,24 @@ function sessionDb(): Promise<IDBDatabase> {
 }
 
 /**
+ * Cache slot for the current site. Path-based restaurants (`/r/<slug>`) all share one origin, so each gets its
+ * own slot: restaurant A's cached session is never restored on restaurant B's pages (or the platform), and
+ * signing out of one restaurant leaves the others' slots alone. Subdomain sites keep one slot per host.
+ */
+const cacheSlot = () => sessionCacheSlot(siteContext(), location.host);
+
+/**
  * Remembers who is signed in on this site (user, restaurant, permissions) so a refresh while offline keeps the
  * POS usable. Access and refresh tokens are NEVER stored here; syncing needs a real online session again.
  */
 export async function saveSessionCache(payload: { user: any; tenant: any; permissions: string[] }) {
+  const slot = cacheSlot();
+  // Only ever cache a session that belongs to the restaurant this page is for.
+  if (slot.slug && payload.tenant?.slug !== slot.slug) return;
   try {
     const db = await sessionDb();
     const t = db.transaction('session', 'readwrite');
-    t.objectStore('session').put({ user: payload.user, tenant: payload.tenant, permissions: payload.permissions, host: location.host, savedAt: Date.now() }, 'current');
+    t.objectStore('session').put({ user: payload.user, tenant: payload.tenant, permissions: payload.permissions, host: location.host, slot: slot.key, savedAt: Date.now() }, slot.key);
     await new Promise((res) => (t.oncomplete = res));
     db.close();
   } catch {
@@ -75,26 +87,31 @@ export async function saveSessionCache(payload: { user: any; tenant: any; permis
 }
 
 export async function loadSessionCache(): Promise<{ user: any; tenant: any; permissions: string[]; savedAt: number } | null> {
+  const slot = cacheSlot();
   try {
     const db = await sessionDb();
     const v: any = await new Promise((res, rej) => {
-      const r = db.transaction('session', 'readonly').objectStore('session').get('current');
+      const r = db.transaction('session', 'readonly').objectStore('session').get(slot.key);
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
     });
     db.close();
-    if (!v || v.host !== location.host || Date.now() - v.savedAt > OFFLINE_SESSION_MAX_AGE_MS) return null;
+    if (!v || v.slot !== slot.key || v.host !== location.host || Date.now() - v.savedAt > OFFLINE_SESSION_MAX_AGE_MS) return null;
+    if (slot.slug && v.tenant?.slug !== slot.slug) return null; // defence in depth: wrong restaurant
     return v;
   } catch {
     return null;
   }
 }
 
+/** Forgets the cached session of THIS site only (other restaurants on the same domain keep theirs). */
 export async function clearSessionCache() {
+  const slot = cacheSlot();
   try {
     const db = await sessionDb();
     const t = db.transaction('session', 'readwrite');
-    t.objectStore('session').delete('current');
+    t.objectStore('session').delete(slot.key);
+    t.objectStore('session').delete('current'); // slot used before per-site slots existed
     await new Promise((res) => (t.oncomplete = res));
     db.close();
   } catch {

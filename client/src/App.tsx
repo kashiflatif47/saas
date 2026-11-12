@@ -8,9 +8,10 @@ import {
 import { AuthProvider, useAuth } from './store/auth';
 import { FeedbackProvider, Loading } from './components/ui';
 import { DashboardLayout, type NavItem } from './components/DashboardLayout';
-import { currentTenantSlug, isCustomDomainHost } from './lib/util';
+import { siteContext } from './lib/util';
 import { assetUrl } from './api/client';
 import LoginPage from './pages/auth/Login';
+import TenantNotFound from './pages/store/TenantNotFound';
 
 const AdminOverview = lazy(() => import('./pages/admin/Overview'));
 const AdminTenants = lazy(() => import('./pages/admin/Tenants'));
@@ -112,8 +113,12 @@ function TenantHome() {
 }
 
 export default function App() {
-  const slug = currentTenantSlug();
-  if (!slug && isCustomDomainHost()) {
+  // Platform (root domain), restaurant (/r/<slug> or <slug>.ROOT_DOMAIN), custom domain or invalid /r/ address.
+  // For path-based restaurants the router basename is /r/<slug> (main.tsx), so the routes below are unchanged.
+  const site = siteContext();
+  const slug = site.slug;
+  if (site.kind === 'invalid') return <TenantNotFound />;
+  if (site.kind === 'custom') {
     // A tenant's own domain: storefront only (the API resolves the tenant from the Host header).
     return (
       <FeedbackProvider>
