@@ -3,6 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { Tenant } from '../models/platform';
 import { Category, Product, effectivePrice } from '../models/menu';
+import { activeVariants, displayPrice, variantIsRequired } from '../lib/menuPricing';
 import { Coupon, Feedback, Order, Reservation, Table } from '../models/operations';
 import { ah, badRequest, notFound } from '../lib/errors';
 import { checkIdParams, validateBody } from '../middleware/validate';
@@ -17,6 +18,12 @@ import { placeOrderSchema } from './orders';
 
 /** Customer-facing API. Tenant is resolved from the Host header by resolvePublicTenant. */
 export const publicRouter = Router();
+
+/** Order as a guest may see it: no tracking token, no internal ingredient usage. */
+function customerOrder(o: any) {
+  const rest = publicOrder(o);
+  return { ...rest, items: (rest.items ?? []).map(({ consumption: _c, ...i }: any) => i) };
+}
 
 const orderLimiter = rateLimit({ windowMs: 60_000, limit: 15, standardHeaders: true, legacyHeaders: false });
 const formLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeaders: true, legacyHeaders: false });
@@ -73,13 +80,23 @@ publicRouter.get('/menu', ah(async (req, res) => {
     .lean();
   res.json({
     categories,
-    products: products.map((p) => ({
-      ...p,
-      effectivePrice: effectivePrice(p as any),
-      soldOut: !p.isAvailable || (p.trackStock && p.stockQty <= 0),
-      stockQty: undefined,
-      addons: p.addons.filter((a: any) => a.isAvailable),
-    })),
+    // Only what a guest can actually choose; inventory links stay private. Prices shown here come from the same
+    // rules the server charges with (lib/menuPricing.ts); the order itself is re-priced on the server.
+    products: products.map((p: any) => {
+      const strip = ({ ingredient: _i, ...o }: any) => o;
+      const noOptionLeft = (p.variants?.length ?? 0) > 0 && variantIsRequired(p) && activeVariants(p).length === 0;
+      return {
+        ...p,
+        effectivePrice: effectivePrice(p),
+        displayPrice: displayPrice(p),
+        soldOut: !p.isAvailable || (p.trackStock && p.stockQty <= 0) || noOptionLeft,
+        stockQty: undefined,
+        variants: activeVariants(p).map(({ recipeMultiplier: _m, ...v }: any) => v),
+        addons: p.addons.filter((a: any) => a.isAvailable).map(strip),
+        modifierGroups: (p.modifierGroups ?? []).filter((g: any) => g.isActive !== false).map((g: any) => ({ ...g, options: g.options.filter((o: any) => o.isAvailable !== false).map(strip) })),
+        removableIngredients: (p.removableIngredients ?? []).filter((r: any) => r.isAvailable !== false).map(strip),
+      };
+    }),
   });
 }));
 
@@ -103,7 +120,7 @@ publicRouter.post('/coupons/validate', formLimiter, validateBody(z.object({ code
 publicRouter.post('/orders', orderLimiter, validateBody(placeOrderSchema.omit({ tableId: true, orderDiscount: true, discountReason: true, confirm: true })), ah(async (req, res) => {
   if (req.body.tableToken && !req.tenant!.features.has('qr_ordering')) throw badRequest('QR ordering is not enabled for this restaurant');
   const { order, trackingToken } = await placeOrder(req.tenant!, req.body, req.body.tableToken ? 'qr' : 'website');
-  res.status(201).json({ order: publicOrder(order), trackingToken });
+  res.status(201).json({ order: customerOrder(order), trackingToken });
 }));
 
 async function loadTrackedOrder(tenantId: any, id: string, token: unknown) {
@@ -115,7 +132,7 @@ async function loadTrackedOrder(tenantId: any, id: string, token: unknown) {
 
 publicRouter.get('/orders/:id', checkIdParams, ah(async (req, res) => {
   const order = await loadTrackedOrder(req.tenantId, req.params.id, req.query.token);
-  const { customer: _c, customerId: _ci, assignedWaiterId: _w, ...rest } = publicOrder(order);
+  const { customer: _c, customerId: _ci, assignedWaiterId: _w, ...rest } = customerOrder(order);
   if (rest.type === 'delivery') (rest as any).delivery = { address: order.delivery?.address, ...customerDeliveryView(order.delivery, { includeCode: true }) };
   // Lets the tracking page show "thank you" instead of a second rating form after a reload.
   const feedbackGiven = !!(await Feedback.exists({ tenantId: req.tenantId, orderId: order._id }));

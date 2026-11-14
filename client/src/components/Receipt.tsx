@@ -3,6 +3,7 @@ import { FileText, Printer } from 'lucide-react';
 import { api, assetUrl } from '../api/client';
 import { Button, useFeedback } from './ui';
 import { formatMoney, ORDER_TYPE_LABEL } from '../lib/util';
+import { itemOptionLabels } from '../lib/options';
 
 const esc = (v: unknown) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
@@ -117,7 +118,7 @@ export function localReceiptData(o: any, tenant: any) {
     restaurant: { name: tenant?.name ?? '', logoUrl: tenant?.branding?.logoUrl, address: '', phone: '', taxRegistrationNumber: st.taxRegistrationNumber || undefined, footer: st.receiptFooter || undefined },
     currency: o.currency, currencyDecimals: st.currencyDecimals ?? 2,
     order: { orderNumber: confirmed ? o.serverOrderNumber : o.localNumber, createdAt: o.createdAt, type: o.type, tableLabel: o.tableLabel, customer: o.customer, delivery: o.delivery, takenBy: o.createdBy, cashiers: [...new Set(o.payments.map((p: any) => p.by))] },
-    items: o.items.map((i: any) => ({ name: i.name, variantName: i.variantName, addons: i.addons.map((a: any) => a.name), quantity: i.quantity, unitPrice: i.unitPrice, lineTotal: i.lineTotal, discount: i.discount })),
+    items: o.items.map((i: any) => ({ name: i.name, variantName: i.variantName, addons: itemOptionLabels(i), quantity: i.quantity, unitPrice: i.unitPrice, lineTotal: i.lineTotal, discount: i.discount })),
     totals: { ...o.totals, couponDiscount: 0, manualDiscountReason: o.manualDiscount?.reason, paid, refunded: 0, balance: Math.max(0, o.totals.total - paid) },
     tax: { label: st.taxLabel || 'Tax', ratePercent: st.taxRatePercent ?? 0, inclusive: !!st.taxInclusive, taxable: o.totals.total - o.totals.tax },
     payments: o.payments.map((p: any) => ({ method: 'cash', amount: p.amount, at: p.at, by: p.by, label: p.status === 'confirmed' ? 'confirmed' : 'recorded on this device' })),

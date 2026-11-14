@@ -41,11 +41,52 @@ categorySchema.index({ tenantId: 1, parentId: 1, sortOrder: 1 });
 export const Category = model('Category', categorySchema);
 
 /* ---------------- Product ---------------- */
-const variantSchema = new Schema({ name: { type: String, required: true }, priceDelta: { type: Number, default: 0 } });
+/*
+ * Option pricing (see lib/menuPricing.ts for the exact rules). All new fields are optional so existing
+ * products keep working unchanged: a product without `variantPricing` is a legacy 'add' product.
+ */
+const ingredientRefSchema = new Schema(
+  { inventoryItemId: { type: Schema.Types.ObjectId, ref: 'InventoryItem', required: true }, quantity: { type: Number, required: true, min: 0 } },
+  { _id: false },
+);
+const variantSchema = new Schema({
+  name: { type: String, required: true },
+  priceDelta: { type: Number, default: 0 }, // 'add' mode (legacy): added to the dish price
+  price: { type: Number, min: 0 }, // 'replace' mode: the option's full price (replaces the dish price)
+  salePrice: { type: Number, min: 0 }, // 'replace' mode: discounted full price
+  saleEndsAt: Date,
+  isActive: { type: Boolean, default: true },
+  recipeMultiplier: { type: Number, min: 0 }, // dish recipe × this per unit (e.g. 3 for "Three Persons")
+});
+/** Extras: always ADDED to the price, per unit, up to maxQty. */
 const addonSchema = new Schema({
   name: { type: String, required: true },
   price: { type: Number, default: 0, min: 0 },
   isAvailable: { type: Boolean, default: true },
+  maxQty: { type: Number, default: 1, min: 1, max: 20 },
+  ingredient: { type: ingredientRefSchema, default: undefined },
+});
+/** Choice groups: sauce, crust, meal upgrade, substitution, toppings (option price 0 = included). */
+const choiceOptionSchema = new Schema({
+  name: { type: String, required: true },
+  price: { type: Number, default: 0, min: 0 },
+  isAvailable: { type: Boolean, default: true },
+  maxQty: { type: Number, default: 1, min: 1, max: 20 },
+  ingredient: { type: ingredientRefSchema, default: undefined },
+});
+const modifierGroupSchema = new Schema({
+  name: { type: String, required: true },
+  minSelect: { type: Number, default: 0, min: 0 },
+  maxSelect: { type: Number, default: 1, min: 1 },
+  freeQty: { type: Number, default: 0, min: 0 },
+  isActive: { type: Boolean, default: true },
+  options: { type: [choiceOptionSchema], default: [] },
+});
+/** "No onions": removing never changes the price; may return an ingredient to stock. */
+const removableSchema = new Schema({
+  name: { type: String, required: true },
+  isAvailable: { type: Boolean, default: true },
+  ingredient: { type: ingredientRefSchema, default: undefined },
 });
 const recipeSchema = new Schema(
   { inventoryItemId: { type: Schema.Types.ObjectId, ref: 'InventoryItem', required: true }, quantity: { type: Number, required: true, min: 0 } },
@@ -61,8 +102,14 @@ const productSchema = new Schema(
     price: { type: Number, required: true, min: 0 }, // minor units
     promoPrice: { type: Number, min: 0 },
     promoEndsAt: Date,
+    /** How option prices work: 'replace' = an option's price IS the item price; missing/'add' = legacy delta. */
+    variantPricing: { type: String, enum: ['replace', 'add'] },
+    variantGroupName: { type: String, trim: true, maxlength: 40 }, // e.g. "Serving size", "Persons"
+    variantRequired: { type: Boolean, default: true },
     variants: { type: [variantSchema], default: [] },
     addons: { type: [addonSchema], default: [] },
+    modifierGroups: { type: [modifierGroupSchema], default: [] },
+    removableIngredients: { type: [removableSchema], default: [] },
     tags: { type: [String], default: [] }, // e.g. spicy, vegan
     isFeatured: { type: Boolean, default: false, index: true },
     isAvailable: { type: Boolean, default: true },
@@ -80,8 +127,5 @@ productSchema.index({ tenantId: 1, isArchived: 1, categoryId: 1, sortOrder: 1 })
 productSchema.index({ 'name.en': 'text', 'name.ur': 'text', 'name.ar': 'text', 'description.en': 'text' });
 export const Product = model('Product', productSchema);
 
-/** Effective base price considering an active promotion. */
-export function effectivePrice(p: { price: number; promoPrice?: number | null; promoEndsAt?: Date | null }, now = new Date()): number {
-  if (p.promoPrice != null && p.promoPrice < p.price && (!p.promoEndsAt || p.promoEndsAt > now)) return p.promoPrice;
-  return p.price;
-}
+/** Effective dish price considering an active promotion (options: see lib/menuPricing.ts). */
+export { productEffectivePrice as effectivePrice } from '../lib/menuPricing';

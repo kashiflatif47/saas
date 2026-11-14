@@ -43,7 +43,10 @@ export interface LocalItem {
   variantId?: string;
   variantName?: string;
   addonIds: string[];
-  addons: { name: string; price: number }[];
+  addons: { name: string; price: number; quantity?: number; group?: string; included?: boolean }[];
+  /** Full selection as sent to the server (orders created before this field existed only have variantId/addonIds). */
+  selection?: import('./menuPricing').ItemSelection;
+  removed?: string[];
   quantity: number;
   unitPrice: number;
   lineTotal: number;

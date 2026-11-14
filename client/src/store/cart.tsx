@@ -1,17 +1,29 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { selectionKey, type ItemSelection } from '../offline/menuPricing';
 
 export interface CartLine {
-  key: string; // product + variant + addons signature
+  key: string; // product + exact configuration + notes: different configurations never merge
   productId: string;
   name: Record<string, string>;
   image?: string;
-  variantId?: string;
-  variantName?: string;
-  addonIds: string[];
-  addonNames: string[];
-  unitPrice: number; // display estimate only — server recomputes
+  /** What was chosen (ids and quantities only). */
+  selection: ItemSelection;
+  /** Readable configuration: option, extras with quantities, choices, removed ingredients. */
+  summary: string[];
+  unitPrice: number; // preview from the shared pricing rules; the server prices the order itself
   quantity: number;
   notes?: string;
+}
+
+const lineKey = (l: Pick<CartLine, 'productId' | 'selection' | 'notes'>) => `${selectionKey(l.productId, l.selection)}|${l.notes ?? ''}`;
+
+/** Carts saved by an earlier version stored variantId/addonIds/addonNames: read them into the current shape. */
+function upgrade(raw: any): CartLine | null {
+  if (!raw?.productId) return null;
+  const selection: ItemSelection = raw.selection ?? { variantId: raw.variantId, addonIds: raw.addonIds ?? [] };
+  const summary: string[] = raw.summary ?? [raw.variantName, ...(raw.addonNames ?? [])].filter(Boolean);
+  const l = { ...raw, selection, summary } as CartLine;
+  return { ...l, key: lineKey(l) };
 }
 
 interface CartState {
@@ -33,7 +45,7 @@ export function CartProvider({ children, tenantSlug }: { children: ReactNode; te
   const storeKey = `cart:${tenantSlug}`;
   const [lines, setLines] = useState<CartLine[]>(() => {
     try {
-      return JSON.parse(localStorage.getItem(storeKey) || '[]');
+      return (JSON.parse(localStorage.getItem(storeKey) || '[]') as any[]).map(upgrade).filter(Boolean) as CartLine[];
     } catch {
       return [];
     }
@@ -67,7 +79,7 @@ export function CartProvider({ children, tenantSlug }: { children: ReactNode; te
   );
 
   const add = useCallback((l: Omit<CartLine, 'key'>) => {
-    const key = [l.productId, l.variantId ?? '', [...l.addonIds].sort().join('+'), l.notes ?? ''].join('|');
+    const key = lineKey(l);
     setLines((prev) => {
       const i = prev.findIndex((x) => x.key === key);
       if (i >= 0) return prev.map((x, j) => (j === i ? { ...x, quantity: Math.min(99, x.quantity + l.quantity) } : x));

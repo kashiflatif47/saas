@@ -26,8 +26,17 @@ const orderItemSchema = new Schema({
   categoryId: { type: Schema.Types.ObjectId, ref: 'Category' },
   stationId: { type: Schema.Types.ObjectId, ref: 'KitchenStation' },
   name: { type: String, required: true },
+  // Snapshot of what was chosen and what it cost WHEN ORDERED (later menu edits never change it).
+  variantId: Schema.Types.ObjectId,
   variantName: String,
-  addons: [{ name: String, price: Number, _id: false }],
+  pricingMode: { type: String, enum: ['none', 'replace', 'add'] },
+  basePrice: Number, // selected base: option's own price ('replace') or dish price
+  listPrice: Number, // the same before sale/promo
+  addons: [{ id: String, name: String, price: Number, quantity: { type: Number, default: 1 }, group: String, included: Boolean, _id: false }],
+  removed: { type: [String], default: undefined }, // "no onions"
+  // Ingredients used per unit, fixed at order time. Absent on orders placed before this existed (then the
+  // product's current recipe is used, as before).
+  consumption: { type: [{ inventoryItemId: Schema.Types.ObjectId, quantity: Number, _id: false }], default: undefined },
   quantity: { type: Number, required: true, min: 1 },
   unitPrice: { type: Number, required: true },
   lineTotal: { type: Number, required: true }, // unitPrice × quantity, before any line discount

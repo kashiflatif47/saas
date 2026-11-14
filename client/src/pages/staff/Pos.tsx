@@ -13,17 +13,18 @@ import { useSocket } from '../../hooks/useSocket';
 import { Badge, Button, Drawer, Field, Input, Loading, Modal, Select, useFeedback } from '../../components/ui';
 import { OrderDrawer } from '../../components/OrderDrawer';
 import { cn, formatMoney, ORDER_TYPE_LABEL, toMajor, toMinor } from '../../lib/util';
+import { OptionSelector, initialSelection, useItemSelection } from '../../components/OptionSelector';
+import { hasOptions, selectionPayload, selectionSummary } from '../../lib/options';
+import { displayPrice, resolveSelection, selectionKey, type ItemSelection } from '../../offline/menuPricing';
 
 interface Line {
   key: string;
   productId: string;
   name: string;
   image?: string;
-  variantId?: string;
-  variantName?: string;
-  addonIds: string[];
-  addonNames: string[];
-  estUnit: number; // display estimate only — the server prices the cart (quote) and the order
+  selection: ItemSelection; // ids and quantities only
+  summary: string[]; // option, extras, choices, removed ingredients
+  estUnit: number; // preview from the shared pricing rules; the server prices the cart (quote) and the order
   quantity: number;
   notes: string;
   discount?: { type: 'percent' | 'fixed'; value: number } | null;
@@ -155,25 +156,29 @@ export default function Pos() {
   // Offline: stock from the last sync minus this device's unsynced orders (may be outdated).
   const localStock = useMemo(() => (offline ? provisionalStock(products ?? [], localOrders) : null), [offline, products, localOrders]);
   const soldOut = (p: any) => !p.isAvailable || (p.trackStock && (localStock?.get(p._id) ?? p.stockQty) <= 0);
-  const base = (p: any) => (p.promoPrice != null && p.promoPrice < p.price && (!p.promoEndsAt || new Date(p.promoEndsAt) > new Date()) ? p.promoPrice : p.price);
   const shown = useMemo(() => (products ?? []).filter((p) => (!cat || p.categoryId === cat) && (!q || p.name.en.toLowerCase().includes(q.toLowerCase()))), [products, cat, q]);
 
-  const addLine = (p: any, variantId?: string, addonIds: string[] = [], replace?: Line) => {
-    const v = p.variants.find((x: any) => x._id === variantId);
-    const addons = addonIds.map((id) => p.addons.find((a: any) => a._id === id)).filter(Boolean);
-    const estUnit = base(p) + (v?.priceDelta ?? 0) + addons.reduce((t: number, a: any) => t + a.price, 0);
-    const key = [p._id, variantId ?? '', [...addonIds].sort().join('+')].join('|');
+  const addLine = (p: any, selection: ItemSelection = {}, replace?: Line) => {
+    let r;
+    try {
+      r = resolveSelection(p, selection); // same rules as the server: an option REPLACES the dish price
+    } catch (e: any) {
+      return fb.info(e.message);
+    }
+    const estUnit = r.unitPrice;
+    const summary = selectionSummary(r);
+    const key = selectionKey(p._id, selection);
     setLines((prev) => {
       const rest = replace ? prev.filter((l) => l.key !== replace.key) : prev;
       const hit = rest.find((l) => l.key === key && !l.notes && !l.discount);
       if (hit) return rest.map((l) => (l === hit ? { ...l, quantity: Math.min(99, l.quantity + (replace?.quantity ?? 1)) } : l));
-      return [...rest, { key: replace && replace.key !== key ? key : replace?.key ?? key, productId: p._id, name: p.name.en, image: p.images?.[0], variantId, variantName: v?.name, addonIds, addonNames: addons.map((a: any) => a.name), estUnit, quantity: replace?.quantity ?? 1, notes: replace?.notes ?? '', discount: replace?.discount ?? null }];
+      return [...rest, { key: replace && replace.key !== key ? key : replace?.key ?? key, productId: p._id, name: p.name.en, image: p.images?.[0], selection, summary, estUnit, quantity: replace?.quantity ?? 1, notes: replace?.notes ?? '', discount: replace?.discount ?? null }];
     });
   };
   const choose = (p: any) => {
     if (soldOut(p)) return fb.info(`${p.name.en} is unavailable`);
-    if (p.variants.length || p.addons.some((a: any) => a.isAvailable)) setPicking({ p });
-    else addLine(p);
+    if (hasOptions(p)) setPicking({ p });
+    else addLine(p, initialSelection(p));
   };
   const update = (key: string, patch: Partial<Line>) => setLines((p) => p.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const setQty = (key: string, n: number) => setLines((p) => (n <= 0 ? p.filter((l) => l.key !== key) : p.map((l) => (l.key === key ? { ...l, quantity: Math.min(99, n) } : l))));
@@ -190,7 +195,7 @@ export default function Pos() {
       couponCode: coupon.trim() || undefined,
       orderDiscount: disc,
       discountReason: anyDiscount ? discountReason || undefined : undefined,
-      items: lines.map((l) => ({ productId: l.productId, variantId: l.variantId, addonIds: l.addonIds, quantity: l.quantity, notes: l.notes || undefined, discount: l.discount ?? undefined })),
+      items: lines.map((l) => ({ productId: l.productId, ...selectionPayload(l.selection), quantity: l.quantity, notes: l.notes || undefined, discount: l.discount ?? undefined })),
     };
   }, [type, tableId, customer, notes, coupon, orderDiscount, discountReason, lines, dec]);
 
@@ -345,7 +350,7 @@ export default function Pos() {
               <div className="flex items-start gap-2">
                 <button type="button" className="min-w-0 flex-1 text-start" onClick={() => setEditing(editing === l.key ? null : l.key)}>
                   <p className="truncate text-sm font-medium">{l.name}</p>
-                  <p className="truncate text-xs text-stone-500">{[l.variantName, ...l.addonNames.map((a) => `+${a}`)].filter(Boolean).join(' · ')}{l.notes && <span className="italic text-amber-700"> “{l.notes}”</span>}</p>
+                  <p className="truncate text-xs text-stone-500">{l.summary.join(' · ')}{l.notes && <span className="italic text-amber-700"> “{l.notes}”</span>}</p>
                   {ql?.discount > 0 && <p className="text-xs text-emerald-700">−{money(ql.discount)}</p>}
                 </button>
                 <div className="flex items-center">
@@ -359,7 +364,7 @@ export default function Pos() {
                 <div className="mt-2 space-y-2 rounded-lg bg-stone-50 p-2">
                   <Input placeholder="Instructions for the kitchen" value={l.notes} maxLength={300} onChange={(e) => update(l.key, { notes: e.target.value })} aria-label="Item instructions" />
                   <div className="flex flex-wrap items-center gap-2">
-                    {(() => { const p = products?.find((x) => x._id === l.productId); return p && (p.variants.length > 0 || p.addons.length > 0) ? <Button size="sm" variant="outline" onClick={() => setPicking({ p, line: l })}>Change options</Button> : null; })()}
+                    {(() => { const p = products?.find((x) => x._id === l.productId); return p && hasOptions(p) ? <Button size="sm" variant="outline" onClick={() => setPicking({ p, line: l })}>Change options</Button> : null; })()}
                     {can('orders:discount') && (
                       <>
                         <Select className="h-9 w-24 py-0" value={l.discount?.type ?? ''} onChange={(e) => update(l.key, { discount: e.target.value ? { type: e.target.value as any, value: 0 } : null })} aria-label="Item discount type">
@@ -449,7 +454,7 @@ export default function Pos() {
                     </div>
                     <div className="p-3">
                       <p className="line-clamp-2 text-sm font-semibold leading-snug text-stone-900">{p.name.en}</p>
-                      <p className="mt-1 text-[13px] font-medium text-stone-500 tabular-nums">{money(base(p))}{p.variants.length ? '+' : ''}</p>
+                      <p className="mt-1 text-[13px] font-medium text-stone-500 tabular-nums">{(() => { const d = displayPrice(p); return `${money(d.amount)}${d.from ? '+' : ''}`; })()}</p>
                     </div>
                   </button>
                 );
@@ -469,7 +474,7 @@ export default function Pos() {
       </div>
       <Drawer open={cartOpen} onClose={() => setCartOpen(false)} title="Current order" width="max-w-md">{cart}</Drawer>
 
-      <OptionPicker pick={picking} money={money} onClose={() => setPicking(null)} onAdd={(p, v, a, line) => { addLine(p, v, a, line); setPicking(null); }} />
+      <OptionPicker pick={picking} money={money} onClose={() => setPicking(null)} onAdd={(p, sel, line) => { addLine(p, sel, line); setPicking(null); }} />
 
       <Modal open={tablePicker} onClose={() => setTablePicker(false)} title="Choose a table" size="lg">
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
@@ -495,44 +500,26 @@ function CatButton({ active, onClick, children }: { active: boolean; onClick: ()
   return <button type="button" onClick={onClick} className={cn('whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition', active ? 'bg-stone-900 text-white' : 'bg-white text-stone-600 ring-1 ring-stone-200 hover:ring-stone-300')}>{children}</button>;
 }
 
-function OptionPicker({ pick, money, onClose, onAdd }: { pick: { p: any; line?: Line } | null; money: (n: number) => string; onClose: () => void; onAdd: (p: any, variantId?: string, addonIds?: string[], line?: Line) => void }) {
-  const [variantId, setVariantId] = useState('');
-  const [addonIds, setAddonIds] = useState<string[]>([]);
-  useEffect(() => {
-    if (!pick) return;
-    setVariantId(pick.line?.variantId ?? pick.p.variants[0]?._id ?? '');
-    setAddonIds(pick.line?.addonIds ?? []);
-  }, [pick]);
-  const p = pick?.p;
+/** POS option picker: the shared selector + the same pricing rules the server charges with. */
+function OptionPicker({ pick, money, onClose, onAdd }: { pick: { p: any; line?: Line } | null; money: (n: number) => string; onClose: () => void; onAdd: (p: any, selection: ItemSelection, line?: Line) => void }) {
+  if (!pick) return null;
+  return <OptionPickerBody key={`${pick.p._id}:${pick.line?.key ?? 'new'}`} pick={pick} money={money} onClose={onClose} onAdd={onAdd} />;
+}
+
+function OptionPickerBody({ pick, money, onClose, onAdd }: { pick: { p: any; line?: Line }; money: (n: number) => string; onClose: () => void; onAdd: (p: any, selection: ItemSelection, line?: Line) => void }) {
+  const { p, line } = pick;
+  const { selection, setSelection, resolved, error } = useItemSelection(p, line?.selection);
   return (
-    <Modal open={!!p} onClose={onClose} title={p?.name?.en} size="sm" footer={<Button size="lg" className="w-full" onClick={() => onAdd(p, variantId || undefined, addonIds, pick?.line)}>{pick?.line ? 'Update' : 'Add to order'}</Button>}>
-      {p && (
-        <div className="space-y-4">
-          {p.variants.length > 0 && (
-            <div className="space-y-2">
-              <p className="label">Choose one</p>
-              {p.variants.map((v: any) => (
-                <label key={v._id} className={cn('flex cursor-pointer items-center justify-between rounded-xl border px-3 py-3 text-sm', variantId === v._id ? 'border-brand bg-brand/5' : 'border-stone-200')}>
-                  <span><input type="radio" className="me-2" checked={variantId === v._id} onChange={() => setVariantId(v._id)} />{v.name}</span>
-                  <span className="text-stone-500">{v.priceDelta ? `${v.priceDelta > 0 ? '+' : ''}${money(v.priceDelta)}` : ''}</span>
-                </label>
-              ))}
-            </div>
-          )}
-          {p.addons.filter((a: any) => a.isAvailable).length > 0 && (
-            <div className="space-y-2">
-              <p className="label">Add-ons</p>
-              {p.addons.filter((a: any) => a.isAvailable).map((a: any) => (
-                <label key={a._id} className="flex cursor-pointer items-center justify-between rounded-xl border border-stone-200 px-3 py-3 text-sm">
-                  <span><input type="checkbox" className="me-2" checked={addonIds.includes(a._id)} onChange={(e) => setAddonIds((x) => (e.target.checked ? [...x, a._id] : x.filter((y) => y !== a._id)))} />{a.name}</span>
-                  <span className="text-stone-500">+{money(a.price)}</span>
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-      <button type="button" className="sr-only" onClick={onClose}><X /></button>
+    <Modal open onClose={onClose} title={p.name?.en} size="sm" footer={
+      <div className="w-full space-y-2">
+        {error && <p className="text-sm text-amber-700" role="status">{error}</p>}
+        <Button size="lg" className="w-full justify-between" disabled={!resolved} onClick={() => resolved && onAdd(p, selection, line)}>
+          <span>{line ? 'Update' : 'Add to order'}</span>
+          {resolved && <span className="tabular-nums">{money(resolved.unitPrice)}</span>}
+        </Button>
+      </div>
+    }>
+      <OptionSelector product={p} value={selection} onChange={setSelection} money={money} />
     </Modal>
   );
 }

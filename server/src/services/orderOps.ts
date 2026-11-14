@@ -15,11 +15,16 @@ import type { AuthUser, ResolvedTenant } from '../types/express';
 import { emit } from '../sockets';
 import { notify } from './notify';
 import { adjustInventoryForItems } from './inventoryService';
-import { broadcastOrder, buildLines, pricingSettings, publicOrder, restoreProductStock, withOrderRetry, type PlaceOrderInput } from './orderService';
+import { broadcastOrder, buildLines, itemSnapshot, pricingSettings, publicOrder, restoreProductStock, withOrderRetry, type PlaceOrderInput } from './orderService';
 
 const OPEN_STATUSES = ['pending', 'accepted', 'preparing', 'partially_ready', 'ready', 'delivered'];
 /** Orders whose items can still be changed (nothing has left the kitchen yet). */
 const MODIFIABLE = ['pending', 'accepted', 'preparing', 'partially_ready', 'ready'];
+
+/** Readable label of a chosen extra/choice for receipts and tickets. */
+export function optionLabel(a: { name: string; quantity?: number; included?: boolean }) {
+  return `${(a.quantity ?? 1) > 1 ? `${a.quantity}× ` : ''}${a.name}${a.included ? ' (included)' : ''}`;
+}
 
 /* ------------------------------------------------------------------ totals */
 
@@ -84,17 +89,9 @@ export async function addOrderItems(tenant: ResolvedTenant, orderId: string, ite
     try {
       const now = new Date();
       for (const l of lines) {
-        o.items.push({
-          productId: l.productId, categoryId: l.categoryId, stationId: l.stationId, name: l.name, variantName: l.variantName, addons: l.addons,
-          quantity: l.quantity, unitPrice: 0, lineTotal: 0, notes: l.notes, prepMinutes: l.prepMinutes, addedAt: now,
-          discount: 0,
-        } as any);
-        // Unit price from the same server pricing rules as a new order.
-        const added: any = o.items[o.items.length - 1];
+        // Same selection rules, pricing and snapshot as a new order (lib/menuPricing + lib/pricing).
         const p = priceOrder([{ ...l, lineDiscount: l.lineDiscount ?? null }], { taxRatePercent: 0, taxInclusive: false, serviceChargePercent: 0 });
-        added.unitPrice = p.lines[0].unitPrice;
-        added.lineTotal = p.lines[0].lineTotal;
-        added.discount = p.lines[0].lineDiscountAmount;
+        o.items.push({ ...itemSnapshot(l, p.lines[0]), addedAt: now } as any);
       }
       await recomputeTotals(tenant, o);
       if (['ready', 'preparing', 'partially_ready'].includes(o.status)) {
@@ -113,7 +110,7 @@ export async function addOrderItems(tenant: ResolvedTenant, orderId: string, ite
       throw e;
     }
   });
-  if (order.inventoryDeducted) await adjustInventoryForItems(tenantId, order, lines.map((l) => ({ productId: l.productId, quantity: l.quantity })), -1, actor.id);
+  if (order.inventoryDeducted) await adjustInventoryForItems(tenantId, order, lines.map((l) => ({ productId: l.productId, quantity: l.quantity, consumption: l.resolved.consumption })), -1, actor.id);
   const obj = order.toObject();
   afterChange(tenant, obj, { action: 'items_added', by: actor.name, items: lines.map((l) => `${l.quantity}× ${l.name}`) });
   if (order.status !== 'pending') await notify(tenantId, { type: 'order.modified', title: `Order #${order.orderNumber}: items added`, body: lines.map((l) => `${l.quantity}× ${l.name}`).join(', '), roles: ['kitchen', 'manager'] });
@@ -178,7 +175,10 @@ export async function updateOrderItem(tenant: ResolvedTenant, orderId: string, i
     if (tracked && qtyDelta < 0) await restoreProductStock(tenantId, [{ productId: item.productId, quantity: -qtyDelta }]);
     return o;
   });
-  if (order.inventoryDeducted && qtyDelta) await adjustInventoryForItems(tenantId, order, [{ productId, quantity: Math.abs(qtyDelta) }], qtyDelta > 0 ? -1 : 1, actor.id);
+  if (order.inventoryDeducted && qtyDelta) {
+    const changed: any = order.items.find((i: any) => String(i._id) === itemId);
+    await adjustInventoryForItems(tenantId, order, [{ productId, quantity: Math.abs(qtyDelta), consumption: changed?.consumption }], qtyDelta > 0 ? -1 : 1, actor.id);
+  }
   const obj = order.toObject();
   afterChange(tenant, obj, { action: 'item_changed', by: actor.name, itemId });
   return obj;
@@ -215,7 +215,7 @@ export async function cancelOrderItem(tenant: ResolvedTenant, orderId: string, i
     }
     o.modifications.push({ at: now, by: actor.name, byId: actor.id, action: 'item_cancelled', detail: { itemId, name: item.name, quantity: item.quantity, reason, wasStarted } });
     await o.save();
-    cancelled = { productId: item.productId, quantity: item.quantity, wasStarted };
+    cancelled = { productId: item.productId, quantity: item.quantity, consumption: item.consumption, wasStarted };
     return o;
   });
   await restoreProductStock(tenantId, [{ productId: cancelled.productId, quantity: cancelled.quantity }]);
@@ -379,7 +379,8 @@ export async function receiptData(tenant: ResolvedTenant, orderId: string) {
       takenBy: order.createdBy?.name, cashiers: cashiers.map((c) => c.name),
     },
     items: order.items.filter((i: any) => i.status !== 'cancelled').map((i: any) => ({
-      name: i.name, variantName: i.variantName, addons: (i.addons ?? []).map((a: any) => a.name), quantity: i.quantity, unitPrice: i.unitPrice, lineTotal: i.lineTotal, discount: i.discount ?? 0, notes: i.notes,
+      // "2× Extra Cheese", "Olives (included)", "No Onions": what was chosen, exactly as charged.
+      name: i.name, variantName: i.variantName, addons: [...(i.addons ?? []).map(optionLabel), ...(i.removed ?? []).map((r: string) => `No ${r}`)], quantity: i.quantity, unitPrice: i.unitPrice, lineTotal: i.lineTotal, discount: i.discount ?? 0, notes: i.notes,
     })),
     totals: {
       subtotal: order.subtotal, lineDiscount: order.lineDiscountTotal ?? 0, couponDiscount: order.couponDiscount ?? (order.couponCode ? order.discount : 0), couponCode: order.couponCode,

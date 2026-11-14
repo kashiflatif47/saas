@@ -9,6 +9,7 @@ import { checkIdParams, validateBody, validateQuery, zI18n, zI18nRequired, zMone
 import { uploadMemory, storeTenantImage, deleteTenantImage } from '../middleware/upload';
 import { audit } from '../services/audit';
 import { crudRouter } from './crudFactory';
+import { validateProductOptions } from '../lib/menuPricing';
 import { emit } from '../sockets';
 
 export const menuRouter = Router();
@@ -107,6 +108,7 @@ menuRouter.post('/categories/:id/image', can('menu:manage'), checkIdParams, uplo
 }));
 
 /* ------------------------------ Products ------------------------------ */
+const zIngredient = z.object({ inventoryItemId: zId, quantity: z.number().positive().max(100000) });
 const productSchema = z.object({
   categoryId: zId,
   name: zI18nRequired,
@@ -114,8 +116,31 @@ const productSchema = z.object({
   price: zMoney,
   promoPrice: zMoney.nullable().optional(),
   promoEndsAt: z.coerce.date().nullable().optional(),
-  variants: z.array(z.object({ _id: zId.optional(), name: z.string().min(1).max(60), priceDelta: z.number().int().min(-1_000_000).max(1_000_000) })).max(20).optional(),
-  addons: z.array(z.object({ _id: zId.optional(), name: z.string().min(1).max(60), price: zMoney, isAvailable: z.boolean().optional() })).max(30).optional(),
+  // Option pricing: see lib/menuPricing.ts. 'replace' = each option's price IS the item price; 'add' = legacy delta.
+  variantPricing: z.enum(['replace', 'add']).optional(),
+  variantGroupName: z.string().max(40).optional(),
+  variantRequired: z.boolean().optional(),
+  variants: z.array(z.object({
+    _id: zId.optional(),
+    name: z.string().trim().min(1).max(60),
+    priceDelta: z.number().int().min(-1_000_000_000).max(1_000_000_000).optional(),
+    price: zMoney.nullable().optional(),
+    salePrice: zMoney.nullable().optional(),
+    saleEndsAt: z.coerce.date().nullable().optional(),
+    isActive: z.boolean().optional(),
+    recipeMultiplier: z.number().positive().max(100).nullable().optional(),
+  })).max(20).optional(),
+  addons: z.array(z.object({ _id: zId.optional(), name: z.string().trim().min(1).max(60), price: zMoney, isAvailable: z.boolean().optional(), maxQty: z.number().int().min(1).max(20).optional(), ingredient: zIngredient.nullable().optional() })).max(30).optional(),
+  modifierGroups: z.array(z.object({
+    _id: zId.optional(),
+    name: z.string().trim().min(1).max(60),
+    minSelect: z.number().int().min(0).max(20).default(0),
+    maxSelect: z.number().int().min(1).max(20).default(1),
+    freeQty: z.number().int().min(0).max(20).default(0),
+    isActive: z.boolean().optional(),
+    options: z.array(z.object({ _id: zId.optional(), name: z.string().trim().min(1).max(60), price: zMoney.default(0), isAvailable: z.boolean().optional(), maxQty: z.number().int().min(1).max(20).optional(), ingredient: zIngredient.nullable().optional() })).min(1).max(30),
+  })).max(10).optional(),
+  removableIngredients: z.array(z.object({ _id: zId.optional(), name: z.string().trim().min(1).max(60), isAvailable: z.boolean().optional(), ingredient: zIngredient.nullable().optional() })).max(30).optional(),
   tags: z.array(z.string().max(30)).max(10).optional(),
   isFeatured: z.boolean().optional(),
   isAvailable: z.boolean().optional(),
@@ -126,10 +151,24 @@ const productSchema = z.object({
   sortOrder: z.number().int().min(0).optional(),
 });
 
+/**
+ * Rejects ambiguous or invalid option pricing BEFORE it can reach a customer (e.g. a 'replace' option without
+ * its own price, a sale price above the price, a choice group whose minimum cannot be met). Checks the product
+ * as it will be after the update.
+ */
+function assertOptionsValid(merged: any) {
+  const problems = validateProductOptions(merged);
+  if (problems.length) throw badRequest(`Option pricing is not valid: ${problems.join('; ')}`, { problems });
+}
+
 async function assertProductRefs(tenantId: any, body: any) {
   if (body.categoryId && !(await Category.exists({ tenantId, _id: body.categoryId }))) throw badRequest('Category not found');
-  if (body.recipe?.length) {
-    const ids = [...new Set(body.recipe.map((r: any) => r.inventoryItemId))];
+  const ingredientIds = [
+    ...(body.recipe ?? []).map((r: any) => r.inventoryItemId),
+    ...[...(body.addons ?? []), ...(body.removableIngredients ?? []), ...(body.modifierGroups ?? []).flatMap((g: any) => g.options ?? [])].map((o: any) => o.ingredient?.inventoryItemId).filter(Boolean),
+  ];
+  if (ingredientIds.length) {
+    const ids = [...new Set(ingredientIds.map(String))];
     if ((await InventoryItem.countDocuments({ tenantId, _id: { $in: ids } })) !== ids.length) throw badRequest('Unknown inventory item in recipe');
   }
   if (body.promoPrice != null && body.price != null && body.promoPrice >= body.price) throw badRequest('Promo price must be lower than the regular price');
@@ -160,7 +199,12 @@ menuRouter.post('/products', can('menu:manage'), validateBody(productSchema), ah
     throw paymentRequired(`Your plan allows ${plan.limits.maxProducts} products`);
   }
   await assertProductRefs(req.tenantId, req.body);
-  const p = await Product.create({ ...req.body, tenantId: req.tenantId });
+  // Pricing mode when the request does not say: options sent with a full `price` (or no options yet) use
+  // replacement pricing; an API client still sending only `priceDelta` keeps the legacy additive meaning.
+  const legacyDeltas = (req.body.variants ?? []).length > 0 && req.body.variants.every((v: any) => v.price == null && v.priceDelta != null);
+  const body = { variantPricing: legacyDeltas ? 'add' : 'replace', ...req.body };
+  assertOptionsValid(body);
+  const p = await Product.create({ ...body, tenantId: req.tenantId });
   await audit(req, 'product.create', 'Product', p._id);
   menuChanged(req);
   res.status(201).json(p);
@@ -177,6 +221,7 @@ menuRouter.patch('/products/:id', can('menu:manage'), checkIdParams, validateBod
     }
   }
   await assertProductRefs(req.tenantId, { price: existing.price, ...req.body });
+  assertOptionsValid({ ...existing, ...req.body });
   const p = await Product.findOneAndUpdate({ tenantId: req.tenantId, _id: req.params.id }, { $set: req.body }, { new: true, runValidators: true });
   await audit(req, req.body.isArchived ? 'product.archive' : 'product.update', 'Product', req.params.id);
   menuChanged(req);

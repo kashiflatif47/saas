@@ -7,6 +7,7 @@ import { useAuth } from '../../store/auth';
 import { useApi } from '../../hooks/useApi';
 import { Button, Loading, useFeedback } from '../../components/ui';
 import { cn, ORDER_TYPE_LABEL } from '../../lib/util';
+import { optionLabel } from '../../lib/options';
 
 function useNow(ms = 1000) {
   const [now, setNow] = useState(Date.now());
@@ -289,7 +290,8 @@ export default function Kitchen() {
                         <span className="mt-0.5 min-w-[2rem] rounded-md bg-white/10 px-1.5 py-0.5 text-center font-semibold tabular-nums">{i.quantity}</span>
                         <div className="min-w-0 flex-1">
                           <p className={cn('font-medium leading-snug', i.status === 'cancelled' && 'line-through')}>{i.name}{i.variantName && <span className="text-amber-300"> · {i.variantName}</span>}</p>
-                          {i.addons?.length > 0 && <p className="text-xs text-stone-400">+ {i.addons.map((a: any) => a.name).join(', ')}</p>}
+                          {i.addons?.length > 0 && <p className="text-xs text-stone-400">+ {i.addons.map((a: any) => optionLabel(a)).join(', ')}</p>}
+                          {i.removed?.length > 0 && <p className="text-xs font-semibold uppercase tracking-wide text-red-400">{i.removed.map((r: string) => `No ${r}`).join(' · ')}</p>}
                           {i.notes && <p className="text-xs italic text-amber-300">“{i.notes}”</p>}
                           {i.status === 'cancelled' && <p className="text-xs text-red-300">Removed{i.cancelReason ? `: ${i.cancelReason}` : ''}</p>}
                           {i.addedAt && i.status !== 'cancelled' && <p className="text-xs text-sky-300">Added later</p>}

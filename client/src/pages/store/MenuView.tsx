@@ -8,6 +8,9 @@ import { cn, formatMoney } from '../../lib/util';
 import { Loading } from '../../components/ui';
 import { useReveal, useScrollSpy } from '../../hooks/useInView';
 import type { StoreInfo } from './Storefront';
+import { OptionSelector, useItemSelection, type OptionLabels } from '../../components/OptionSelector';
+import { selectionPayload, selectionSummary } from '../../lib/options';
+import { displayPrice as computeDisplayPrice } from '../../offline/menuPricing';
 
 type Money = (n: number) => string;
 
@@ -45,7 +48,7 @@ export default function MenuView({ store }: { store: StoreInfo }) {
   }, [menu, q]);
   const shownCats = top.filter((c) => (byCat.get(c._id) ?? []).length > 0);
   const featured = (menu?.products ?? []).filter((p) => p.isFeatured && !p.soldOut).slice(0, 10);
-  const offers = (menu?.products ?? []).filter((p) => p.effectivePrice < p.price && !p.soldOut).slice(0, 10);
+  const offers = (menu?.products ?? []).filter((p) => { const d = shownPrice(p); return d.amount < d.original && !p.soldOut; }).slice(0, 10);
   const active = useScrollSpy(shownCats.map((c) => `cat-${c._id}`), 150);
 
   // Keep the active category pill visible inside the horizontally scrolling bar.
@@ -140,7 +143,7 @@ export default function MenuView({ store }: { store: StoreInfo }) {
         {!q && offers.length > 0 && (
           <Shelf title={t('offers')} icon={<Tag className="h-4 w-4" />}>
             {offers.map((p) => (
-              <ShelfCard key={p._id} p={p} money={money} onOpen={() => setSheet(p)} badge={`−${Math.round((1 - p.effectivePrice / p.price) * 100)}%`} />
+              <ShelfCard key={p._id} p={p} money={money} onOpen={() => setSheet(p)} badge={`−${Math.round((1 - shownPrice(p).amount / shownPrice(p).original) * 100)}%`} />
             ))}
           </Shelf>
         )}
@@ -345,14 +348,20 @@ function DishCard({ p, money, onOpen }: { p: any; money: Money; onOpen: () => vo
   );
 }
 
+/** Card price: cheapest purchasable configuration ("from" when options cost more). Server-computed when available. */
+function shownPrice(p: any): { amount: number; original: number; from: boolean } {
+  return p.displayPrice ?? computeDisplayPrice(p);
+}
+
 function Price({ p, money }: { p: any; money: Money }) {
   const { t } = useI18n();
-  const promo = p.effectivePrice < p.price;
+  const d = shownPrice(p);
+  const promo = d.amount < d.original;
   return (
     <span className="tabular text-[15px] font-semibold">
-      {p.variants?.length > 0 && <span className="me-1 text-xs font-normal opacity-60">{t('from')}</span>}
-      <span className={promo ? 'text-brand' : ''}>{money(p.effectivePrice)}</span>
-      {promo && <span className="ms-1.5 text-xs font-normal line-through opacity-45">{money(p.price)}</span>}
+      {d.from && <span className="me-1 text-xs font-normal opacity-60">{t('from')}</span>}
+      <span className={promo ? 'text-brand' : ''}>{money(d.amount)}</span>
+      {promo && <span className="ms-1.5 text-xs font-normal line-through opacity-45">{money(d.original)}</span>}
     </span>
   );
 }
@@ -425,15 +434,24 @@ function ProductSheet({ p, money, onClose, onAdded }: { p: any; money: Money; on
   const cart = useCart();
   const gallery = useRef<HTMLDivElement>(null);
   const [img, setImg] = useState(0);
-  const [variantId, setVariantId] = useState<string>(p.variants[0]?._id ?? '');
-  const [addonIds, setAddonIds] = useState<string[]>([]);
+  const { selection, setSelection, resolved, error } = useItemSelection(p);
   const [qty, setQty] = useState(1);
   const [notes, setNotes] = useState('');
-  const v = p.variants.find((x: any) => x._id === variantId);
-  const unit = p.effectivePrice + (v?.priceDelta ?? 0) + addonIds.reduce((s, id) => s + (p.addons.find((a: any) => a._id === id)?.price ?? 0), 0);
+  const [tried, setTried] = useState(false);
+  const labels: OptionLabels = {
+    chooseOption: t('chooseOption'), extras: t('extras'), required: t('required'), optional: t('optional'), chooseUpTo: t('chooseUpTo'),
+    chooseExactly: t('chooseExactly'), chooseRange: t('chooseRange'), includedN: t('includedN'), without: t('without'), noX: t('noX'),
+  };
+  // Unit price from the same rules the server charges with (a selected option REPLACES the dish price).
+  const unit = resolved?.unitPrice ?? null;
 
   const add = () => {
-    cart.add({ productId: p._id, name: p.name, image: p.images[0], variantId: variantId || undefined, variantName: v?.name, addonIds, addonNames: addonIds.map((id) => p.addons.find((a: any) => a._id === id)?.name ?? ''), unitPrice: unit, quantity: qty, notes: notes.trim() || undefined });
+    if (!resolved) return setTried(true); // show what is still missing
+    cart.add({
+      productId: p._id, name: p.name, image: p.images[0], selection,
+      summary: selectionSummary(resolved, { included: t('included'), no: (x) => t('noX').replace('{x}', x) }),
+      unitPrice: resolved.unitPrice, quantity: qty, notes: notes.trim() || undefined,
+    });
     onAdded();
     onClose();
   };
@@ -488,46 +506,8 @@ function ProductSheet({ p, money, onClose, onAdded }: { p: any; money: Money; on
             </div>
             {pick(p.description) && <p className="mt-3 text-[15px] leading-relaxed opacity-75">{pick(p.description)}</p>}
           </div>
-          {p.variants.length > 0 && (
-            <fieldset>
-              <legend className="mb-2.5 text-sm font-semibold">{t('chooseOption')}</legend>
-              <div className="space-y-2">
-                {p.variants.map((x: any) => (
-                  <label key={x._id} className={cn('flex cursor-pointer items-center justify-between rounded-brand-sm border px-4 py-3.5 transition', variantId === x._id ? 'border-brand bg-brand/[0.06] ring-1 ring-brand' : 'border-store-text/10 bg-store-surface hover:border-store-text/25')}>
-                    <span className="flex items-center gap-3">
-                      <input type="radio" name="variant" checked={variantId === x._id} onChange={() => setVariantId(x._id)} className="h-4 w-4 accent-[rgb(var(--brand))]" />
-                      {x.name}
-                    </span>
-                    {x.priceDelta !== 0 && (
-                      <span className="tabular text-sm opacity-70">
-                        {x.priceDelta > 0 ? '+' : '−'}
-                        {money(Math.abs(x.priceDelta))}
-                      </span>
-                    )}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          )}
-          {p.addons.length > 0 && (
-            <fieldset>
-              <legend className="mb-2.5 text-sm font-semibold">{t('extras')}</legend>
-              <div className="space-y-2">
-                {p.addons.map((a: any) => {
-                  const on = addonIds.includes(a._id);
-                  return (
-                    <label key={a._id} className={cn('flex cursor-pointer items-center justify-between rounded-brand-sm border px-4 py-3.5 transition', on ? 'border-brand bg-brand/[0.06]' : 'border-store-text/10 bg-store-surface hover:border-store-text/25')}>
-                      <span className="flex items-center gap-3">
-                        <input type="checkbox" checked={on} onChange={(e) => setAddonIds((prev) => (e.target.checked ? [...prev, a._id] : prev.filter((x) => x !== a._id)))} className="h-4 w-4 accent-[rgb(var(--brand))]" />
-                        {a.name}
-                      </span>
-                      <span className="tabular text-sm opacity-70">+{money(a.price)}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </fieldset>
-          )}
+          <OptionSelector product={p} value={selection} onChange={(s) => { setSelection(s); setTried(false); }} money={money} tone="store" labels={labels} />
+          {tried && error && <p className="rounded-brand-sm bg-red-500/10 px-4 py-3 text-sm font-medium text-red-700" role="alert">{error}</p>}
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={300} placeholder={t('notes')} className="store-input h-auto min-h-[84px] py-3" />
         </div>
       </div>
@@ -543,9 +523,9 @@ function ProductSheet({ p, money, onClose, onAdded }: { p: any; money: Money; on
             <Plus className="h-4 w-4" />
           </button>
         </div>
-        <button onClick={add} className="store-btn h-12 flex-1 justify-between px-5">
-          <span>{t('addToCart')}</span>
-          <span className="tabular">{money(unit * qty)}</span>
+        <button onClick={add} aria-disabled={!resolved} className={cn('store-btn h-12 flex-1 justify-between px-5', !resolved && 'opacity-60')}>
+          <span>{!resolved ? t('chooseOption') : t('addToCart')}</span>
+          {unit != null && <span className="tabular">{money(unit * qty)}</span>}
         </button>
       </div>
     </Sheet>
@@ -627,7 +607,8 @@ function CartSheet({ store, money, onClose }: { store: StoreInfo; money: Money; 
         notes: notes || undefined,
         couponCode: couponInfo?.code,
         idempotencyKey: checkoutKey.current,
-        items: cart.lines.map((l) => ({ productId: l.productId, variantId: l.variantId, addonIds: l.addonIds, quantity: l.quantity, notes: l.notes })),
+        // Ids and quantities only: the server prices every line from the menu (never from these previews).
+        items: cart.lines.map((l) => ({ productId: l.productId, ...selectionPayload(l.selection), quantity: l.quantity, notes: l.notes })),
       });
       try {
         const mine = JSON.parse(localStorage.getItem(`orders:${store.slug}`) || '[]');
@@ -669,7 +650,7 @@ function CartSheet({ store, money, onClose }: { store: StoreInfo; money: Money; 
                   {l.image && <img src={assetUrl(l.image)} alt="" className="h-16 w-16 shrink-0 rounded-brand-sm object-cover" />}
                   <div className="min-w-0 flex-1">
                     <p className="font-medium leading-snug">{pick(l.name)}</p>
-                    {(l.variantName || l.addonNames.length > 0) && <p className="text-xs opacity-60">{[l.variantName, ...l.addonNames].filter(Boolean).join(' · ')}</p>}
+                    {l.summary.length > 0 && <p className="text-xs opacity-60">{l.summary.join(' · ')}</p>}
                     {l.notes && <p className="text-xs italic opacity-60">“{l.notes}”</p>}
                     <p className="tabular mt-1 text-sm font-semibold">{money(l.unitPrice * l.quantity)}</p>
                   </div>

@@ -1,4 +1,5 @@
 import { priceOrder, type ManualDiscountInput } from './pricing';
+import { productEffectivePrice, resolveSelection, SelectionError, type ItemSelection } from './menuPricing';
 import type { LocalItem, LocalOrder } from './types';
 
 export interface MenuSnapshot {
@@ -25,7 +26,7 @@ export interface OfflineDraft {
   couponCode?: string;
   orderDiscount?: ManualDiscountInput;
   discountReason?: string;
-  items: { productId: string; variantId?: string; addonIds?: string[]; quantity: number; notes?: string; discount?: ManualDiscountInput }[];
+  items: ({ productId: string; quantity: number; notes?: string; discount?: ManualDiscountInput } & ItemSelection)[];
 }
 export interface Actor {
   name: string;
@@ -35,10 +36,8 @@ export interface Actor {
 
 export class OfflineValidationError extends Error {}
 
-export function effectivePrice(p: { price: number; promoPrice?: number | null; promoEndsAt?: string | Date | null }, now = new Date()) {
-  if (p.promoPrice != null && p.promoPrice < p.price && (!p.promoEndsAt || new Date(p.promoEndsAt) > now)) return p.promoPrice;
-  return p.price;
-}
+/** Dish price with a running promotion (same function the server uses). */
+export const effectivePrice = productEffectivePrice;
 
 /** Stock a tracked dish has left on THIS device: last synced stock minus quantities in unsynced local orders. */
 export function provisionalStock(products: any[], localOrders: LocalOrder[]) {
@@ -78,18 +77,18 @@ export function estimateOffline(menu: MenuSnapshot, cfg: PricingConfig, draft: O
     if (!p || p.isArchived) throw new OfflineValidationError('One or more items are no longer available');
     const cat = catById.get(p.categoryId);
     if (!p.isAvailable || !cat?.isActive) throw new OfflineValidationError(`${p.name.en} is currently unavailable`);
-    const variant = it.variantId ? p.variants.find((v: any) => v._id === it.variantId) : undefined;
-    if (it.variantId && !variant) throw new OfflineValidationError(`Invalid option for ${p.name.en}`);
-    if (!it.variantId && p.variants.length > 0) throw new OfflineValidationError(`Please choose an option for ${p.name.en}`);
-    const addons = (it.addonIds ?? []).map((aid) => {
-      const a = p.addons.find((x: any) => x._id === aid && x.isAvailable);
-      if (!a) throw new OfflineValidationError(`Invalid add-on for ${p.name.en}`);
-      return { name: a.name, price: a.price };
-    });
+    // Exactly the server's selection rules (verbatim copy of server/src/lib/menuPricing.ts).
+    let r;
+    try {
+      r = resolveSelection(p, it);
+    } catch (e) {
+      if (e instanceof SelectionError) throw new OfflineValidationError(e.message);
+      throw e;
+    }
     want.set(p._id, (want.get(p._id) ?? 0) + it.quantity);
     return {
-      productId: p._id, name: p.name.en, basePrice: effectivePrice(p), variantName: variant?.name, variantDelta: variant?.priceDelta ?? 0, addons, quantity: it.quantity,
-      lineDiscount: it.discount ?? null, _p: p, _cat: cat, _it: it,
+      productId: p._id, name: p.name.en, basePrice: r.basePrice, variantName: r.variantName, variantDelta: r.variantDelta, addons: r.addons, quantity: it.quantity,
+      lineDiscount: it.discount ?? null, _p: p, _cat: cat, _it: it, _r: r,
     };
   });
   for (const [pid, q] of want) {
@@ -104,7 +103,9 @@ export function estimateOffline(menu: MenuSnapshot, cfg: PricingConfig, draft: O
     if (priced.subtotal > 0 && ((priced.lineDiscount + priced.manualDiscount) / priced.subtotal) * 100 > cap + 1e-9) throw new OfflineValidationError(`Manual discounts above ${cap}% need the owner`);
   }
   const items: LocalItem[] = priced.lines.map((l, i) => ({
-    productId: l.productId, name: l.name, variantId: lines[i]._it.variantId, variantName: l.variantName, addonIds: lines[i]._it.addonIds ?? [], addons: l.addons ?? [],
+    productId: l.productId, name: l.name, variantId: lines[i]._r.variantId, variantName: l.variantName, addonIds: lines[i]._it.addonIds ?? [], addons: lines[i]._r.addons,
+    selection: { variantId: lines[i]._it.variantId, addonIds: lines[i]._it.addonIds, addons: lines[i]._it.addons, choices: lines[i]._it.choices, removeIds: lines[i]._it.removeIds },
+    removed: lines[i]._r.removed,
     quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, discount: l.lineDiscountAmount, notes: lines[i]._it.notes,
     stationId: lines[i]._cat?.stationId ?? defaultStation, prepMinutes: typeof lines[i]._p.prepMinutes === 'number' ? lines[i]._p.prepMinutes : undefined, status: 'queued',
   }));
@@ -116,7 +117,7 @@ export function estimateOffline(menu: MenuSnapshot, cfg: PricingConfig, draft: O
     payload: {
       type: draft.type, tableId: table?._id, customer: draft.customer, delivery: draft.type === 'delivery' ? draft.delivery : undefined, notes: draft.notes,
       orderDiscount: draft.orderDiscount, discountReason: manual ? draft.discountReason : undefined,
-      items: draft.items.map((i) => ({ productId: i.productId, variantId: i.variantId, addonIds: i.addonIds, quantity: i.quantity, notes: i.notes, discount: i.discount })),
+      items: draft.items.map((i) => ({ productId: i.productId, variantId: i.variantId, addonIds: i.addonIds, addons: i.addons, choices: i.choices, removeIds: i.removeIds, quantity: i.quantity, notes: i.notes, discount: i.discount })),
       expectedTotal: priced.total,
     },
   };

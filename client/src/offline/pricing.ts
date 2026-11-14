@@ -10,15 +10,22 @@
 
 export interface PricedAddon {
   name: string;
-  price: number; // minor units
+  price: number; // minor units, charged per unit
+  quantity?: number; // units of this add-on per item (default 1)
+  group?: string; // choice group it belongs to (display only)
 }
 
 export interface PricingLineInput {
   productId: string;
   name: string;
-  basePrice: number; // effective unit base price (promo applied) in minor units
+  /**
+   * The item's selected base price in minor units, already resolved by menuPricing.resolveSelection():
+   * a REPLACE-mode variant's own (sale) price, or the dish's effective (promo) price. Never both.
+   */
+  basePrice: number;
   variantName?: string;
-  variantDelta?: number; // minor units, may be negative but final unit price is clamped >= 0
+  /** Legacy ADD-mode variants only: amount added to basePrice (may be negative; unit price clamped >= 0). */
+  variantDelta?: number;
   addons?: PricedAddon[];
   quantity: number;
   /** Authorised item-level discount for the whole line (percent of the line, or fixed minor units). */
@@ -81,8 +88,9 @@ export function roundMinor(value: number): number {
   return Math.sign(value) * Math.round(Math.abs(value));
 }
 
+/** Unit price = selected base + legacy variant delta + Σ(add-on price × add-on quantity). */
 export function computeUnitPrice(line: PricingLineInput): number {
-  const addons = (line.addons ?? []).reduce((s, a) => s + a.price, 0);
+  const addons = (line.addons ?? []).reduce((s, a) => s + a.price * (a.quantity ?? 1), 0);
   return Math.max(0, line.basePrice + (line.variantDelta ?? 0) + addons);
 }
 
@@ -120,6 +128,10 @@ export function priceOrder(
       throw new PricingError(`Invalid quantity for ${l.name}`);
     for (const p of [l.basePrice, l.variantDelta ?? 0, ...(l.addons ?? []).map((a) => a.price)]) {
       if (!Number.isInteger(p)) throw new PricingError('Prices must be integer minor units');
+    }
+    for (const a of l.addons ?? []) {
+      if (a.price < 0) throw new PricingError('Add-on prices cannot be negative');
+      if (a.quantity !== undefined && (!Number.isInteger(a.quantity) || a.quantity < 1 || a.quantity > 99)) throw new PricingError(`Invalid quantity for ${a.name}`);
     }
     const unitPrice = computeUnitPrice(l);
     const lineTotal = unitPrice * l.quantity;

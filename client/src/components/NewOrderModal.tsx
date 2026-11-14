@@ -3,9 +3,12 @@ import { Minus, Plus, Search } from 'lucide-react';
 import { api } from '../api/client';
 import { useAuth } from '../store/auth';
 import { Button, Field, Input, Loading, Modal, Select, useFeedback } from './ui';
-import { cn, formatMoney } from '../lib/util';
+import { formatMoney } from '../lib/util';
+import { OptionSelector, initialSelection, useItemSelection } from './OptionSelector';
+import { hasOptions, selectionPayload, selectionSummary } from '../lib/options';
+import { displayPrice, resolveSelection, selectionKey, type ItemSelection } from '../offline/menuPricing';
 
-interface Line { key: string; productId: string; name: string; variantId?: string; variantName?: string; addonIds: string[]; unit: number; quantity: number }
+interface Line { key: string; productId: string; name: string; selection: ItemSelection; summary: string[]; unit: number; quantity: number }
 
 /** Staff-entered order (waiter at the table, cashier at the counter). Prices are recomputed by the server. */
 /** Also used to add items to an existing order (`appendTo` = order id): the server re-prices the order. */
@@ -23,8 +26,6 @@ export function NewOrderModal({ open, onClose, onCreated, presetTableId, appendT
   const [tableId, setTableId] = useState(presetTableId ?? '');
   const [notes, setNotes] = useState('');
   const [picking, setPicking] = useState<any | null>(null);
-  const [variantId, setVariantId] = useState('');
-  const [addonIds, setAddonIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -43,27 +44,28 @@ export function NewOrderModal({ open, onClose, onCreated, presetTableId, appendT
   }, [open]);
 
   const shown = useMemo(() => (products ?? []).filter((p) => (!cat || p.categoryId === cat) && (!q || p.name.en.toLowerCase().includes(q.toLowerCase()))), [products, cat, q]);
-  const base = (p: any) => (p.promoPrice != null && p.promoPrice < p.price && (!p.promoEndsAt || new Date(p.promoEndsAt) > new Date()) ? p.promoPrice : p.price);
-
-  const addLine = (p: any, vId?: string, aIds: string[] = []) => {
-    const v = p.variants.find((x: any) => x._id === vId);
-    const unit = base(p) + (v?.priceDelta ?? 0) + aIds.reduce((s, id) => s + (p.addons.find((a: any) => a._id === id)?.price ?? 0), 0);
-    const key = [p._id, vId ?? '', [...aIds].sort().join('+')].join('|');
-    setLines((prev) => (prev.some((l) => l.key === key) ? prev.map((l) => (l.key === key ? { ...l, quantity: l.quantity + 1 } : l)) : [...prev, { key, productId: p._id, name: p.name.en, variantId: vId, variantName: v?.name, addonIds: aIds, unit, quantity: 1 }]));
+  /** Preview price from the same rules the server charges with (an option REPLACES the dish price). */
+  const addLine = (p: any, selection: ItemSelection = {}) => {
+    let r;
+    try {
+      r = resolveSelection(p, selection);
+    } catch (e: any) {
+      return fb.info(e.message);
+    }
+    const key = selectionKey(p._id, selection);
+    const line: Line = { key, productId: p._id, name: p.name.en, selection, summary: selectionSummary(r), unit: r.unitPrice, quantity: 1 };
+    setLines((prev) => (prev.some((l) => l.key === key) ? prev.map((l) => (l.key === key ? { ...l, quantity: l.quantity + 1 } : l)) : [...prev, line]));
   };
 
   const choose = (p: any) => {
-    if (p.variants.length || p.addons.length) {
-      setPicking(p);
-      setVariantId(p.variants[0]?._id ?? '');
-      setAddonIds([]);
-    } else addLine(p);
+    if (hasOptions(p)) setPicking(p);
+    else addLine(p, initialSelection(p));
   };
 
   const submit = async () => {
     setBusy(true);
     try {
-      const items = lines.map((l) => ({ productId: l.productId, variantId: l.variantId, addonIds: l.addonIds, quantity: l.quantity, notes: appendTo && notes ? notes : undefined }));
+      const items = lines.map((l) => ({ productId: l.productId, ...selectionPayload(l.selection), quantity: l.quantity, notes: appendTo && notes ? notes : undefined }));
       const o = appendTo
         ? await api.post(`/api/staff/orders/${appendTo}/items`, { items })
         : await api.post('/api/staff/orders', { type, tableId: type === 'dine_in' ? tableId || undefined : undefined, notes: notes || undefined, items });
@@ -91,7 +93,7 @@ export function NewOrderModal({ open, onClose, onCreated, presetTableId, appendT
               {shown.map((p) => (
                 <button key={p._id} onClick={() => choose(p)} className="rounded-xl border border-stone-200 p-3 text-start transition hover:border-brand hover:bg-brand/5">
                   <p className="line-clamp-2 text-sm font-medium">{p.name.en}</p>
-                  <p className="mt-1 text-xs text-stone-500">{money(base(p))}{p.variants.length ? '+' : ''}</p>
+                  <p className="mt-1 text-xs text-stone-500">{(() => { const d = displayPrice(p); return `${money(d.amount)}${d.from ? '+' : ''}`; })()}</p>
                 </button>
               ))}
             </div>
@@ -105,7 +107,7 @@ export function NewOrderModal({ open, onClose, onCreated, presetTableId, appendT
               {lines.length === 0 && <li className="p-6 text-center text-sm text-stone-400">Tap items to add them</li>}
               {lines.map((l) => (
                 <li key={l.key} className="flex items-center gap-2 px-3 py-2 text-sm">
-                  <div className="min-w-0 flex-1"><p className="truncate font-medium">{l.name}</p>{l.variantName && <p className="text-xs text-stone-500">{l.variantName}</p>}</div>
+                  <div className="min-w-0 flex-1"><p className="truncate font-medium">{l.name}</p>{l.summary.length > 0 && <p className="text-xs text-stone-500">{l.summary.join(' · ')}</p>}</div>
                   <Button size="icon" variant="ghost" onClick={() => setLines((p) => p.flatMap((x) => (x.key === l.key ? (x.quantity > 1 ? [{ ...x, quantity: x.quantity - 1 }] : []) : [x])))} aria-label="Decrease"><Minus className="h-3.5 w-3.5" /></Button>
                   <span className="w-5 text-center tabular-nums">{l.quantity}</span>
                   <Button size="icon" variant="ghost" onClick={() => setLines((p) => p.map((x) => (x.key === l.key ? { ...x, quantity: x.quantity + 1 } : x)))} aria-label="Increase"><Plus className="h-3.5 w-3.5" /></Button>
@@ -116,25 +118,16 @@ export function NewOrderModal({ open, onClose, onCreated, presetTableId, appendT
           </div>
         </div>
       )}
-      <Modal open={!!picking} onClose={() => setPicking(null)} title={picking?.name?.en} size="sm" footer={<Button onClick={() => { addLine(picking, variantId || undefined, addonIds); setPicking(null); }}>Add</Button>}>
-        {picking && (
-          <div className="space-y-4">
-            {picking.variants.length > 0 && (
-              <div className="space-y-2">{picking.variants.map((v: any) => (
-                <label key={v._id} className={cn('flex cursor-pointer items-center justify-between rounded-lg border px-3 py-2 text-sm', variantId === v._id ? 'border-brand bg-brand/5' : 'border-stone-200')}>
-                  <span><input type="radio" className="me-2" checked={variantId === v._id} onChange={() => setVariantId(v._id)} />{v.name}</span>
-                  <span className="text-stone-500">{v.priceDelta ? `+${money(v.priceDelta)}` : ''}</span>
-                </label>))}</div>
-            )}
-            {picking.addons.filter((a: any) => a.isAvailable).map((a: any) => (
-              <label key={a._id} className="flex items-center justify-between text-sm">
-                <span><input type="checkbox" className="me-2" checked={addonIds.includes(a._id)} onChange={(e) => setAddonIds((p) => (e.target.checked ? [...p, a._id] : p.filter((x) => x !== a._id)))} />{a.name}</span>
-                <span className="text-stone-500">+{money(a.price)}</span>
-              </label>
-            ))}
-          </div>
-        )}
-      </Modal>
+      {picking && <PickOptions key={picking._id} p={picking} money={money} onClose={() => setPicking(null)} onAdd={(sel) => { addLine(picking, sel); setPicking(null); }} />}
+    </Modal>
+  );
+}
+
+function PickOptions({ p, money, onClose, onAdd }: { p: any; money: (n: number) => string; onClose: () => void; onAdd: (s: ItemSelection) => void }) {
+  const { selection, setSelection, resolved, error } = useItemSelection(p);
+  return (
+    <Modal open onClose={onClose} title={p.name?.en} size="sm" footer={<>{error && <span className="me-auto self-center text-sm text-amber-700">{error}</span>}<Button disabled={!resolved} onClick={() => onAdd(selection)}>Add{resolved ? ` · ${money(resolved.unitPrice)}` : ''}</Button></>}>
+      <OptionSelector product={p} value={selection} onChange={setSelection} money={money} />
     </Modal>
   );
 }

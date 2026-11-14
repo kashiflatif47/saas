@@ -60,23 +60,31 @@ async function checkLowStock(tenantId: Types.ObjectId, item: any) {
   }
 }
 
-/** Deducts recipe ingredients for every item in an accepted order. Idempotent via order.inventoryDeducted. */
-export async function consumeInventoryForOrder(tenantId: Types.ObjectId, order: any, actorId?: string) {
-  const productIds = [...new Set(order.items.filter((i: any) => i.status !== 'cancelled').map((i: any) => String(i.productId)))];
-  const products = await Product.find({ tenantId, _id: { $in: productIds }, 'recipe.0': { $exists: true } }).select('recipe').lean();
-  if (products.length === 0) {
-    await markDeducted(order, true);
-    return;
-  }
+type ConsumingItem = { productId: Types.ObjectId | string; quantity: number; consumption?: { inventoryItemId: any; quantity: number }[] | null };
+
+/**
+ * Ingredient totals for a set of order items. Items ordered since option-aware recipes exist carry their own
+ * per-unit consumption snapshot (dish recipe × option multiplier + extras − removed ingredients, fixed at order
+ * time). Older items have none: they use the product's current recipe, exactly as before.
+ */
+async function ingredientTotals(tenantId: Types.ObjectId, items: ConsumingItem[]) {
+  const legacyIds = [...new Set(items.filter((i) => !Array.isArray(i.consumption)).map((i) => String(i.productId)))];
+  const products = legacyIds.length ? await Product.find({ tenantId, _id: { $in: legacyIds }, 'recipe.0': { $exists: true } }).select('recipe').lean() : [];
   const recipeBy = new Map<string, any[]>(products.map((p) => [String(p._id), p.recipe]));
   const totals = new Map<string, number>();
-  for (const it of order.items) {
-    if (it.status === 'cancelled') continue;
-    for (const r of recipeBy.get(String(it.productId)) ?? []) {
+  for (const it of items) {
+    const perUnit = Array.isArray(it.consumption) ? it.consumption : recipeBy.get(String(it.productId)) ?? [];
+    for (const r of perUnit) {
       const k = String(r.inventoryItemId);
       totals.set(k, (totals.get(k) ?? 0) + r.quantity * it.quantity);
     }
   }
+  return totals;
+}
+
+/** Deducts recipe ingredients for every item in an accepted order. Idempotent via order.inventoryDeducted. */
+export async function consumeInventoryForOrder(tenantId: Types.ObjectId, order: any, actorId?: string) {
+  const totals = await ingredientTotals(tenantId, order.items.filter((i: any) => i.status !== 'cancelled'));
   for (const [itemId, qty] of totals) {
     try {
       await applyStockDelta(tenantId, itemId, -qty, 'consumption', { refType: 'Order', refId: order._id, actorId, allowNegative: true, reason: `Order #${order.orderNumber}` });
@@ -112,21 +120,12 @@ async function markDeducted(order: any, value: boolean) {
 export async function adjustInventoryForItems(
   tenantId: Types.ObjectId,
   order: { _id: Types.ObjectId; orderNumber: number },
-  items: { productId: Types.ObjectId | string; quantity: number }[],
+  items: ConsumingItem[],
   sign: 1 | -1,
   actorId?: string,
 ) {
   if (!items.length) return;
-  const ids = [...new Set(items.map((i) => String(i.productId)))];
-  const products = await Product.find({ tenantId, _id: { $in: ids }, 'recipe.0': { $exists: true } }).select('recipe').lean();
-  const recipeBy = new Map<string, any[]>(products.map((p) => [String(p._id), p.recipe]));
-  const totals = new Map<string, number>();
-  for (const it of items) {
-    for (const r of recipeBy.get(String(it.productId)) ?? []) {
-      const k = String(r.inventoryItemId);
-      totals.set(k, (totals.get(k) ?? 0) + r.quantity * it.quantity);
-    }
-  }
+  const totals = await ingredientTotals(tenantId, items);
   for (const [itemId, qty] of totals) {
     try {
       await applyStockDelta(tenantId, itemId, sign * qty, sign < 0 ? 'consumption' : 'return', {

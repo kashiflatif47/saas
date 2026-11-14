@@ -8,6 +8,7 @@ import { PaymentPanel } from './PaymentPanel';
 import { ReceiptActions } from './Receipt';
 import { NewOrderModal } from './NewOrderModal';
 import { cn, formatMoney, fulfilmentLabel, ORDER_TYPE_LABEL, toMajor, toMinor } from '../lib/util';
+import { itemOptionLabels } from '../lib/options';
 
 const NEXT: Record<string, { to: string; label: string; perm: string; variant?: 'primary' | 'outline' | 'danger' }[]> = {
   pending: [{ to: 'accepted', label: 'Confirm', perm: 'orders:accept' }, { to: 'rejected', label: 'Reject', perm: 'orders:accept', variant: 'danger' }],
@@ -153,7 +154,7 @@ export function OrderDrawer({ orderId, onClose, onChanged }: { orderId: string |
                 <span className="font-semibold tabular-nums">{i.quantity}×</span>
                 <div className="min-w-0 flex-1">
                   <p className={cn('font-medium', i.status === 'cancelled' && 'line-through')}>{i.name}{i.variantName && <span className="text-stone-500"> · {i.variantName}</span>}</p>
-                  {i.addons?.length > 0 && <p className="text-xs text-stone-500">+ {i.addons.map((a: any) => a.name).join(', ')}</p>}
+                  {itemOptionLabels(i).length > 0 && <p className="text-xs text-stone-500">{itemOptionLabels(i).join(' · ')}</p>}
                   {i.notes && <p className="text-xs italic text-amber-700">{i.notes}</p>}
                   {i.discount > 0 && <p className="text-xs text-emerald-700">Discount −{money(i.discount)}{i.discountReason ? ` · ${i.discountReason}` : ''}</p>}
                   {i.status === 'cancelled' && i.cancelReason && <p className="text-xs text-red-600">Removed by {i.cancelledBy}: {i.cancelReason}</p>}

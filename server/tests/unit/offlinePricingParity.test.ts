@@ -15,6 +15,13 @@ test('offline pricing is a verbatim copy of the server pricing module', () => {
   assert.equal(body.replace(/\r\n/g, '\n'), s.replace(/\r\n/g, '\n'), 'client/src/offline/pricing.ts must equal server/src/lib/pricing.ts');
 });
 
+test('menu option pricing in the browser is a verbatim copy of the server module', () => {
+  const s = fs.readFileSync(path.join(__dirname, '../../src/lib/menuPricing.ts'), 'utf8');
+  const c = fs.readFileSync(path.join(__dirname, '../../../client/src/offline/menuPricing.ts'), 'utf8');
+  const body = c.slice(c.indexOf('*/') + 3); // after the "VERBATIM COPY" header
+  assert.equal(body.replace(/\r\n/g, '\n'), s.replace(/\r\n/g, '\n'), 'client/src/offline/menuPricing.ts must equal server/src/lib/menuPricing.ts');
+});
+
 test('offline and server pricing give identical results on randomised orders', () => {
   let seed = 42;
   const rnd = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2 ** 31), seed % n);

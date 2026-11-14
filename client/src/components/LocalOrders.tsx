@@ -7,6 +7,7 @@ import { isQuotaError } from '../offline/idbStore';
 import { Badge, Button, Drawer, Field, Input, Select, useFeedback } from './ui';
 import { localReceiptData, printHtml, receiptHtml } from './Receipt';
 import { cn, formatMoney, ORDER_TYPE_LABEL, toMajor, toMinor } from '../lib/util';
+import { itemOptionLabels } from '../lib/options';
 
 export function orderSyncBadge(o: LocalOrder, op?: OfflineOp) {
   if (o.syncState === 'confirmed') return <Badge tone="good" dot>Confirmed · #{o.serverOrderNumber}</Badge>;
@@ -117,7 +118,7 @@ export function LocalOrderPanel({ localId, onClose }: { localId: string | null; 
             {o.items.map((i, idx) => (
               <li key={idx} className="flex gap-3 px-4 py-2.5">
                 <span className="font-semibold tabular-nums">{i.quantity}×</span>
-                <div className="min-w-0 flex-1"><p className="font-medium">{i.name}{i.variantName && <span className="text-stone-500"> · {i.variantName}</span>}</p>{i.addons.length > 0 && <p className="text-xs text-stone-500">+ {i.addons.map((a) => a.name).join(', ')}</p>}{i.notes && <p className="text-xs italic text-amber-700">{i.notes}</p>}</div>
+                <div className="min-w-0 flex-1"><p className="font-medium">{i.name}{i.variantName && <span className="text-stone-500"> · {i.variantName}</span>}</p>{itemOptionLabels(i).length > 0 && <p className="text-xs text-stone-500">{itemOptionLabels(i).join(' · ')}</p>}{i.notes && <p className="text-xs italic text-amber-700">{i.notes}</p>}</div>
                 <span className="tabular-nums">{money(i.lineTotal)}</span>
               </li>
             ))}

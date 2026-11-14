@@ -6,6 +6,8 @@ import { useAuth } from '../../store/auth';
 import { Badge, Button, Card, Empty, ErrorState, Field, Input, Loading, Modal, PageHeader, Select, Tabs, Textarea, Toggle, useFeedback } from '../../components/ui';
 import { cn, formatMoney, toLocalInputValue, toMajor, toMinor } from '../../lib/util';
 import { UtensilsCrossed as HeaderIcon } from 'lucide-react';
+import { ProductOptionsEditor, optionsToBody, optionsToForm } from './ProductOptionsEditor';
+import { displayPrice } from '../../offline/menuPricing';
 
 type Lang = 'en' | 'ur' | 'ar';
 const LANGS: { k: Lang; label: string }[] = [{ k: 'en', label: 'English' }, { k: 'ur', label: 'اردو' }, { k: 'ar', label: 'العربية' }];
@@ -123,11 +125,18 @@ export default function MenuPage() {
                     <div className="flex items-start justify-between gap-3">
                       <h3 className="text-[15px] font-semibold leading-snug text-stone-900">{p.name.en}</h3>
                       <div className="text-end text-sm">
-                        {p.promoPrice != null && p.promoPrice < p.price ? (<><p className="font-semibold text-brand">{money(p.promoPrice)}</p><p className="text-xs text-stone-400 line-through">{money(p.price)}</p></>) : <p className="font-semibold">{money(p.price)}</p>}
+                        {(() => {
+                          // What a customer actually pays (same rules as checkout): cheapest option, "from" when options differ.
+                          const d = displayPrice(p);
+                          return d.amount < d.original
+                            ? <><p className="font-semibold text-brand">{d.from ? 'from ' : ''}{money(d.amount)}</p><p className="text-xs text-stone-400 line-through">{money(d.original)}</p></>
+                            : <p className="font-semibold">{d.from ? 'from ' : ''}{money(d.amount)}</p>;
+                        })()}
                       </div>
                     </div>
                     {(p.name.ur || p.name.ar) && <p className="mt-0.5 text-xs text-stone-400" dir="rtl">{[p.name.ur, p.name.ar].filter(Boolean).join(' · ')}</p>}
-                    <p className="mt-1.5 text-[13px] text-stone-500">{p.variants.length} options · {p.addons.length} add-ons</p>
+                    <p className="mt-1.5 text-[13px] text-stone-500">{p.variants.length} options · {p.addons.length} extras{p.modifierGroups?.length ? ` · ${p.modifierGroups.length} choice groups` : ''}</p>
+                    {p.variants.length > 0 && p.variantPricing !== 'replace' && <p className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">Options add to the dish price — review</p>}
                     <div className="mt-4 flex items-center justify-between border-t border-stone-100 pt-4">
                       {!archived ? <Toggle checked={p.isAvailable} onChange={(v) => quick(p, { isAvailable: v }, v ? 'Available' : 'Marked unavailable')} label={<span className="text-xs">Available</span>} /> : <span />}
                       <div className="flex gap-1">
@@ -283,7 +292,7 @@ function CategoryModal({ value, onClose, categories, stations, onSaved }: any) {
 }
 
 function blankProduct(categoryId?: string) {
-  return { categoryId: categoryId ?? '', name: { en: '' }, description: {}, price: '', promoPrice: '', promoEndsAt: '', variants: [], addons: [], tags: '', isFeatured: false, isAvailable: true, trackStock: false, stockQty: 0, recipe: [], prepMinutes: 10, images: [] };
+  return { categoryId: categoryId ?? '', name: { en: '' }, description: {}, price: '', promoPrice: '', promoEndsAt: '', ...optionsToForm({}, 2), tags: '', isFeatured: false, isAvailable: true, trackStock: false, stockQty: 0, recipe: [], prepMinutes: 10, images: [] };
 }
 function toForm(p: any, dec: number) {
   return {
@@ -291,8 +300,7 @@ function toForm(p: any, dec: number) {
     price: toMajor(p.price, dec),
     promoPrice: p.promoPrice != null ? toMajor(p.promoPrice, dec) : '',
     promoEndsAt: toLocalInputValue(p.promoEndsAt), // local time, matching how the input value is parsed back
-    variants: p.variants.map((v: any) => ({ ...v, priceDelta: toMajor(v.priceDelta, dec) })),
-    addons: p.addons.map((a: any) => ({ ...a, price: toMajor(a.price, dec) })),
+    ...optionsToForm(p, dec),
     tags: (p.tags ?? []).join(', '),
   };
 }
@@ -322,8 +330,7 @@ function ProductModal({ value, onClose, categories, onChanged }: any) {
         price: toMinor(v.price, dec),
         promoPrice: v.promoPrice === '' ? null : toMinor(v.promoPrice, dec),
         promoEndsAt: v.promoEndsAt ? new Date(v.promoEndsAt).toISOString() : null,
-        variants: v.variants.map((x: any) => ({ ...(x._id ? { _id: x._id } : {}), name: x.name, priceDelta: toMinor(x.priceDelta || 0, dec) })),
-        addons: v.addons.map((x: any) => ({ ...(x._id ? { _id: x._id } : {}), name: x.name, price: toMinor(x.price || 0, dec), isAvailable: x.isAvailable ?? true })),
+        ...optionsToBody(v, dec), // options, extras, choice groups, removable ingredients (explicit pricing mode)
         tags: String(v.tags).split(',').map((s) => s.trim()).filter(Boolean),
         isFeatured: v.isFeatured,
         isAvailable: v.isAvailable,
@@ -364,8 +371,8 @@ function ProductModal({ value, onClose, categories, onChanged }: any) {
     }
   };
 
-  const listEdit = (key: 'variants' | 'addons' | 'recipe', i: number, patch: any) => setV({ ...v, [key]: v[key].map((x: any, j: number) => (j === i ? { ...x, ...patch } : x)) });
-  const listDel = (key: 'variants' | 'addons' | 'recipe', i: number) => setV({ ...v, [key]: v[key].filter((_: any, j: number) => j !== i) });
+  const listEdit = (key: 'recipe', i: number, patch: any) => setV({ ...v, [key]: v[key].map((x: any, j: number) => (j === i ? { ...x, ...patch } : x)) });
+  const listDel = (key: 'recipe', i: number) => setV({ ...v, [key]: v[key].filter((_: any, j: number) => j !== i) });
 
   return (
     <Modal open onClose={onClose} title={v._id ? `Edit · ${v.name.en}` : 'New dish'} size="xl" footer={<><Button variant="outline" onClick={onClose}>Close</Button><Button onClick={save} loading={busy} disabled={!v.name?.en || v.price === '' || !v.categoryId}>Save</Button></>}>
@@ -392,19 +399,7 @@ function ProductModal({ value, onClose, categories, onChanged }: any) {
           {v.trackStock && <Input type="number" min="0" className="w-28" value={v.stockQty} onChange={(e) => setV({ ...v, stockQty: e.target.value })} aria-label="Stock quantity" />}
         </div>
 
-        <section>
-          <div className="mb-2 flex items-center justify-between"><p className="text-sm font-semibold">Options (variants)</p><Button size="sm" variant="ghost" onClick={() => setV({ ...v, variants: [...v.variants, { name: '', priceDelta: '0' }] })}><Plus className="h-4 w-4" /> Add</Button></div>
-          {v.variants.length === 0 && <p className="text-xs text-stone-400">e.g. Half / Full, Small / Large. Customers must choose one.</p>}
-          {v.variants.map((x: any, i: number) => (
-            <div key={i} className="mb-2 flex gap-2"><Input placeholder="Name" value={x.name} onChange={(e) => listEdit('variants', i, { name: e.target.value })} /><Input className="w-36" type="number" step="0.01" placeholder="+ price" value={x.priceDelta} onChange={(e) => listEdit('variants', i, { priceDelta: e.target.value })} /><Button size="icon" variant="ghost" onClick={() => listDel('variants', i)} aria-label="Remove"><X className="h-4 w-4" /></Button></div>
-          ))}
-        </section>
-        <section>
-          <div className="mb-2 flex items-center justify-between"><p className="text-sm font-semibold">Add-ons</p><Button size="sm" variant="ghost" onClick={() => setV({ ...v, addons: [...v.addons, { name: '', price: '0', isAvailable: true }] })}><Plus className="h-4 w-4" /> Add</Button></div>
-          {v.addons.map((x: any, i: number) => (
-            <div key={i} className="mb-2 flex items-center gap-2"><Input placeholder="Name" value={x.name} onChange={(e) => listEdit('addons', i, { name: e.target.value })} /><Input className="w-36" type="number" step="0.01" min="0" value={x.price} onChange={(e) => listEdit('addons', i, { price: e.target.value })} /><Toggle checked={x.isAvailable ?? true} onChange={(isAvailable) => listEdit('addons', i, { isAvailable })} /><Button size="icon" variant="ghost" onClick={() => listDel('addons', i)} aria-label="Remove"><X className="h-4 w-4" /></Button></div>
-          ))}
-        </section>
+        <ProductOptionsEditor v={v} setV={setV} dec={dec} money={(n) => formatMoney(n, tenant?.settings?.currency, dec)} inventory={hasFeature('inventory') ? inventory : null} />
         {hasFeature('inventory') && (
           <section>
             <div className="mb-2 flex items-center justify-between"><p className="text-sm font-semibold">Recipe (deducted from inventory when an order is accepted)</p><Button size="sm" variant="ghost" onClick={() => setV({ ...v, recipe: [...v.recipe, { inventoryItemId: '', quantity: '' }] })}><Plus className="h-4 w-4" /> Ingredient</Button></div>

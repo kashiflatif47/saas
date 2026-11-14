@@ -7,6 +7,7 @@ import { useSocket } from '../../hooks/useSocket';
 import { cn, formatMoney } from '../../lib/util';
 import { Loading } from '../../components/ui';
 import type { StoreInfo } from './Storefront';
+import { itemOptionLabels } from '../../lib/options';
 
 const STEPS = [
   { key: 'pending', icon: Clock },
@@ -85,7 +86,7 @@ export default function OrderTracking({ store }: { store: StoreInfo }) {
         <ul className="mt-6 space-y-2 border-t border-black/5 pt-4 text-sm">
           {order.items.map((i: any) => (
             <li key={i._id} className="flex justify-between gap-3">
-              <span>{i.quantity}× {i.name}{i.variantName ? ` · ${i.variantName}` : ''}</span>
+              <span>{i.quantity}× {i.name}{i.variantName ? ` · ${i.variantName}` : ''}{itemOptionLabels(i).length ? <span className="block text-xs opacity-60">{itemOptionLabels(i).join(' · ')}</span> : null}</span>
               <span className="text-xs opacity-60">{i.status === 'ready' || i.status === 'served' ? '✓' : ''}</span>
             </li>
           ))}

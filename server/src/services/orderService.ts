@@ -1,7 +1,8 @@
 import mongoose, { Types } from 'mongoose';
-import { Category, KitchenStation, Product, effectivePrice } from '../models/menu';
+import { Category, KitchenStation, Product } from '../models/menu';
 import { Counter, Coupon, Customer, Order, Table } from '../models/operations';
-import { priceOrder, type CouponInput, type ManualDiscountInput, type PricingLineInput } from '../lib/pricing';
+import { priceOrder, type CouponInput, type ManualDiscountInput, type PricedLine, type PricingLineInput } from '../lib/pricing';
+import { resolveSelection, SelectionError, type ItemSelection, type ResolvedSelection } from '../lib/menuPricing';
 import { canTransition, canTransitionItem, deriveOrderStatus, type ItemStatus, type OrderStatus } from '../lib/orderState';
 import { randomToken } from '../lib/crypto';
 import { AppError, badRequest, conflict, forbidden, notFound } from '../lib/errors';
@@ -29,7 +30,8 @@ export interface PlaceOrderInput {
   notes?: string;
   couponCode?: string;
   idempotencyKey?: string;
-  items: { productId: string; variantId?: string; addonIds?: string[]; quantity: number; notes?: string; discount?: ManualDiscountInput }[];
+  /** Ids and quantities only (see ItemSelection); prices always come from the database. */
+  items: ({ productId: string; quantity: number; notes?: string; discount?: ManualDiscountInput } & ItemSelection)[];
 }
 
 /** The order already placed with this checkout key (tenant-scoped), with its tracking token. */
@@ -80,6 +82,7 @@ export async function restoreProductStock(tenantId: Types.ObjectId, items: { pro
 }
 
 export interface PreparedLine extends PricingLineInput {
+  resolved: ResolvedSelection;
   categoryId: Types.ObjectId;
   stationId?: Types.ObjectId;
   notes?: string;
@@ -184,21 +187,22 @@ export async function buildLines(tenantId: Types.ObjectId, items: PlaceOrderInpu
     const p = byId.get(it.productId)!;
     const cat = catById.get(String(p.categoryId));
     if (!p.isAvailable || !cat?.isActive) throw badRequest(`${p.name.en} is currently unavailable`);
-    const variant = it.variantId ? p.variants.find((v: any) => String(v._id) === it.variantId) : undefined;
-    if (it.variantId && !variant) throw badRequest(`Invalid option for ${p.name.en}`);
-    if (!it.variantId && p.variants.length > 0) throw badRequest(`Please choose an option for ${p.name.en}`);
-    const addons = (it.addonIds ?? []).map((aid) => {
-      const a = p.addons.find((x: any) => String(x._id) === aid && x.isAvailable);
-      if (!a) throw badRequest(`Invalid add-on for ${p.name.en}`);
-      return { name: a.name, price: a.price };
-    });
+    // One rule set for every channel (storefront, QR, POS, staff, offline sync): see lib/menuPricing.ts.
+    let resolved: ResolvedSelection;
+    try {
+      resolved = resolveSelection(p as any, { variantId: it.variantId, addonIds: it.addonIds, addons: it.addons, choices: it.choices, removeIds: it.removeIds });
+    } catch (e) {
+      if (e instanceof SelectionError) throw badRequest(e.message);
+      throw e;
+    }
     lines.push({
       productId: String(p._id),
       name: p.name.en,
-      basePrice: effectivePrice(p as any),
-      variantName: variant?.name,
-      variantDelta: variant?.priceDelta ?? 0,
-      addons,
+      basePrice: resolved.basePrice,
+      variantName: resolved.variantName,
+      variantDelta: resolved.variantDelta,
+      addons: resolved.addons,
+      resolved,
       quantity: it.quantity,
       lineDiscount: it.discount ?? null,
       categoryId: p.categoryId,
@@ -209,6 +213,34 @@ export async function buildLines(tenantId: Types.ObjectId, items: PlaceOrderInpu
   }
 
   return { lines, byId };
+}
+
+/**
+ * The stored order item: a snapshot of the selection and of every price that made up the line. Shared by new
+ * orders and items added to open orders, so both record exactly the same breakdown.
+ */
+export function itemSnapshot(line: PreparedLine, priced: PricedLine) {
+  const r = line.resolved;
+  return {
+    productId: line.productId,
+    categoryId: line.categoryId,
+    stationId: line.stationId,
+    name: line.name,
+    variantId: r.variantId,
+    variantName: r.variantName,
+    pricingMode: r.pricingMode,
+    basePrice: r.basePrice,
+    listPrice: r.listPrice,
+    addons: r.addons.map((a) => ({ id: a.id, name: a.name, price: a.price, quantity: a.quantity, group: a.group, included: a.included })),
+    removed: r.removed.length ? r.removed : undefined,
+    consumption: r.consumption,
+    quantity: priced.quantity,
+    unitPrice: priced.unitPrice,
+    lineTotal: priced.lineTotal,
+    discount: priced.lineDiscountAmount,
+    notes: line.notes,
+    prepMinutes: line.prepMinutes,
+  };
 }
 
 export function pricingSettings(tenant: ResolvedTenant) {
@@ -310,19 +342,8 @@ export async function placeOrder(
       customer: input.customer,
       customerId,
       items: priced.lines.map((l, idx) => ({
-        productId: l.productId,
-        categoryId: lines[idx].categoryId,
-        stationId: lines[idx].stationId,
-        name: l.name,
-        variantName: l.variantName,
-        addons: l.addons,
-        quantity: l.quantity,
-        unitPrice: l.unitPrice,
-        lineTotal: l.lineTotal,
-        discount: l.lineDiscountAmount,
+        ...itemSnapshot(lines[idx], l),
         discountReason: l.lineDiscountAmount ? input.discountReason : undefined,
-        notes: lines[idx].notes,
-        prepMinutes: lines[idx].prepMinutes,
       })),
       subtotal: priced.subtotal,
       discount: priced.discount,

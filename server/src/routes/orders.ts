@@ -43,10 +43,15 @@ export const placeOrderSchema = z.object({
   notes: z.string().max(500).optional(),
   couponCode: z.string().max(40).optional(),
   idempotencyKey: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/, 'Invalid idempotency key').optional(),
+  // Selections are ids and quantities ONLY. Any price a client adds (unitPrice, total…) is stripped by zod and the
+  // server prices every line from the database (lib/menuPricing.ts + lib/pricing.ts).
   items: z.array(z.object({
     productId: zId,
     variantId: zId.optional(),
-    addonIds: z.array(zId).max(20).optional(),
+    addonIds: z.array(zId).max(20).optional(), // legacy: each extra once
+    addons: z.array(z.object({ id: zId, quantity: z.number().int().min(1).max(20).default(1) })).max(30).optional(),
+    choices: z.array(z.object({ groupId: zId, optionId: zId, quantity: z.number().int().min(1).max(20).default(1) })).max(60).optional(),
+    removeIds: z.array(zId).max(30).optional(),
     quantity: z.number().int().min(1).max(99),
     notes: z.string().max(300).optional(),
     discount: zDiscount.optional(),
