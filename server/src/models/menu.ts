@@ -57,11 +57,14 @@ const variantSchema = new Schema({
   saleEndsAt: Date,
   isActive: { type: Boolean, default: true },
   recipeMultiplier: { type: Number, min: 0 }, // dish recipe × this per unit (e.g. 3 for "Three Persons")
+  description: { type: String, trim: true, maxlength: 200 },
 });
 /** Extras: always ADDED to the price, per unit, up to maxQty. */
 const addonSchema = new Schema({
   name: { type: String, required: true },
+  description: { type: String, trim: true, maxlength: 200 },
   price: { type: Number, default: 0, min: 0 },
+  salePrice: { type: Number, min: 0 }, // lower price while set
   isAvailable: { type: Boolean, default: true },
   maxQty: { type: Number, default: 1, min: 1, max: 20 },
   ingredient: { type: ingredientRefSchema, default: undefined },
@@ -69,7 +72,9 @@ const addonSchema = new Schema({
 /** Choice groups: sauce, crust, meal upgrade, substitution, toppings (option price 0 = included). */
 const choiceOptionSchema = new Schema({
   name: { type: String, required: true },
+  description: { type: String, trim: true, maxlength: 200 },
   price: { type: Number, default: 0, min: 0 },
+  salePrice: { type: Number, min: 0 },
   isAvailable: { type: Boolean, default: true },
   maxQty: { type: Number, default: 1, min: 1, max: 20 },
   ingredient: { type: ingredientRefSchema, default: undefined },
@@ -80,6 +85,7 @@ const modifierGroupSchema = new Schema({
   maxSelect: { type: Number, default: 1, min: 1 },
   freeQty: { type: Number, default: 0, min: 0 },
   isActive: { type: Boolean, default: true },
+  kind: { type: String, enum: ['paid', 'included'], default: 'paid' }, // 'included' = every choice is free
   options: { type: [choiceOptionSchema], default: [] },
 });
 /** "No onions": removing never changes the price; may return an ingredient to stock. */
@@ -105,7 +111,10 @@ const productSchema = new Schema(
     /** How option prices work: 'replace' = an option's price IS the item price; missing/'add' = legacy delta. */
     variantPricing: { type: String, enum: ['replace', 'add'] },
     variantGroupName: { type: String, trim: true, maxlength: 40 }, // e.g. "Serving size", "Persons"
-    variantRequired: { type: Boolean, default: true },
+    // No default on purpose: new dishes always store it (the API sets false = base price is orderable); dishes
+    // saved before this existed keep their stored value, and a missing value keeps the old "required" behaviour.
+    variantRequired: Boolean,
+    baseOptionLabel: { type: String, trim: true, maxlength: 40 }, // e.g. "Regular", "Full Plate"
     variants: { type: [variantSchema], default: [] },
     addons: { type: [addonSchema], default: [] },
     modifierGroups: { type: [modifierGroupSchema], default: [] },

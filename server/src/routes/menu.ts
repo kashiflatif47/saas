@@ -120,6 +120,7 @@ const productSchema = z.object({
   variantPricing: z.enum(['replace', 'add']).optional(),
   variantGroupName: z.string().max(40).optional(),
   variantRequired: z.boolean().optional(),
+  baseOptionLabel: z.string().trim().max(40).optional(),
   variants: z.array(z.object({
     _id: zId.optional(),
     name: z.string().trim().min(1).max(60),
@@ -129,8 +130,9 @@ const productSchema = z.object({
     saleEndsAt: z.coerce.date().nullable().optional(),
     isActive: z.boolean().optional(),
     recipeMultiplier: z.number().positive().max(100).nullable().optional(),
+    description: z.string().trim().max(200).optional(),
   })).max(20).optional(),
-  addons: z.array(z.object({ _id: zId.optional(), name: z.string().trim().min(1).max(60), price: zMoney, isAvailable: z.boolean().optional(), maxQty: z.number().int().min(1).max(20).optional(), ingredient: zIngredient.nullable().optional() })).max(30).optional(),
+  addons: z.array(z.object({ _id: zId.optional(), name: z.string().trim().min(1).max(60), description: z.string().trim().max(200).optional(), price: zMoney, salePrice: zMoney.nullable().optional(), isAvailable: z.boolean().optional(), maxQty: z.number().int().min(1).max(20).optional(), ingredient: zIngredient.nullable().optional() })).max(30).optional(),
   modifierGroups: z.array(z.object({
     _id: zId.optional(),
     name: z.string().trim().min(1).max(60),
@@ -138,7 +140,8 @@ const productSchema = z.object({
     maxSelect: z.number().int().min(1).max(20).default(1),
     freeQty: z.number().int().min(0).max(20).default(0),
     isActive: z.boolean().optional(),
-    options: z.array(z.object({ _id: zId.optional(), name: z.string().trim().min(1).max(60), price: zMoney.default(0), isAvailable: z.boolean().optional(), maxQty: z.number().int().min(1).max(20).optional(), ingredient: zIngredient.nullable().optional() })).min(1).max(30),
+    kind: z.enum(['paid', 'included']).optional(),
+    options: z.array(z.object({ _id: zId.optional(), name: z.string().trim().min(1).max(60), description: z.string().trim().max(200).optional(), price: zMoney.default(0), salePrice: zMoney.nullable().optional(), isAvailable: z.boolean().optional(), maxQty: z.number().int().min(1).max(20).optional(), ingredient: zIngredient.nullable().optional() })).min(1).max(30),
   })).max(10).optional(),
   removableIngredients: z.array(z.object({ _id: zId.optional(), name: z.string().trim().min(1).max(60), isAvailable: z.boolean().optional(), ingredient: zIngredient.nullable().optional() })).max(30).optional(),
   tags: z.array(z.string().max(30)).max(10).optional(),
@@ -202,7 +205,9 @@ menuRouter.post('/products', can('menu:manage'), validateBody(productSchema), ah
   // Pricing mode when the request does not say: options sent with a full `price` (or no options yet) use
   // replacement pricing; an API client still sending only `priceDelta` keeps the legacy additive meaning.
   const legacyDeltas = (req.body.variants ?? []).length > 0 && req.body.variants.every((v: any) => v.price == null && v.priceDelta != null);
-  const body = { variantPricing: legacyDeltas ? 'add' : 'replace', ...req.body };
+  // Ordering at the base price stays possible unless the request explicitly requires an option (an API client
+  // still sending legacy deltas keeps the old "must choose" behaviour).
+  const body = { variantPricing: legacyDeltas ? 'add' : 'replace', variantRequired: legacyDeltas, ...req.body };
   assertOptionsValid(body);
   const p = await Product.create({ ...body, tenantId: req.tenantId });
   await audit(req, 'product.create', 'Product', p._id);

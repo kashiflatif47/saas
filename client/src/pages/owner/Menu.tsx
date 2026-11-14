@@ -136,7 +136,8 @@ export default function MenuPage() {
                     </div>
                     {(p.name.ur || p.name.ar) && <p className="mt-0.5 text-xs text-stone-400" dir="rtl">{[p.name.ur, p.name.ar].filter(Boolean).join(' · ')}</p>}
                     <p className="mt-1.5 text-[13px] text-stone-500">{p.variants.length} options · {p.addons.length} extras{p.modifierGroups?.length ? ` · ${p.modifierGroups.length} choice groups` : ''}</p>
-                    {p.variants.length > 0 && p.variantPricing !== 'replace' && <p className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">Options add to the dish price — review</p>}
+                    {p.variants.length > 0 && p.variantPricing !== 'replace' && <p className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">Variants add to the base price — review</p>}
+                    {p.variants.length > 0 && p.variantRequired !== false && <p className="ms-1 mt-1.5 inline-flex items-center gap-1 rounded-md bg-stone-100 px-2 py-0.5 text-[11px] font-medium text-stone-600" title="The base price cannot be ordered on its own. Change it under the dish's variants.">Customers must choose a variant</p>}
                     <div className="mt-4 flex items-center justify-between border-t border-stone-100 pt-4">
                       {!archived ? <Toggle checked={p.isAvailable} onChange={(v) => quick(p, { isAvailable: v }, v ? 'Available' : 'Marked unavailable')} label={<span className="text-xs">Available</span>} /> : <span />}
                       <div className="flex gap-1">

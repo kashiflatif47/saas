@@ -441,6 +441,7 @@ function ProductSheet({ p, money, onClose, onAdded }: { p: any; money: Money; on
   const labels: OptionLabels = {
     chooseOption: t('chooseOption'), extras: t('extras'), required: t('required'), optional: t('optional'), chooseUpTo: t('chooseUpTo'),
     chooseExactly: t('chooseExactly'), chooseRange: t('chooseRange'), includedN: t('includedN'), without: t('without'), noX: t('noX'),
+    regular: t('regular'), included: t('included'),
   };
   // Unit price from the same rules the server charges with (a selected option REPLACES the dish price).
   const unit = resolved?.unitPrice ?? null;

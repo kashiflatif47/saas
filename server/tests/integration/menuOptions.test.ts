@@ -44,6 +44,7 @@ const halwaPuriBody = () => ({
   promoPrice: R(850),
   variantPricing: 'replace',
   variantGroupName: 'Persons',
+  variantRequired: true, // persons must be chosen for this dish (new dishes default to base-price ordering)
   variants: [
     { name: 'Single Person', price: R(500), recipeMultiplier: 1 },
     { name: 'Two Persons', price: R(1000), recipeMultiplier: 2 },

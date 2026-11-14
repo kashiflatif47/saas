@@ -11,17 +11,21 @@
  *
  * PRICING RULES (all integer minor units)
  *  1. Selected base price
- *     - No options, or an optional option not chosen: the dish's effective price
- *       (promo price while the promotion runs, otherwise the regular price).
+ *     - No option chosen: the dish's effective price (promo price while the promotion runs, otherwise the
+ *       regular price). Unless the dish says options are required (variantRequired === true, or legacy dishes
+ *       that never stored the flag), ordering at this base price is always a valid choice, shown to customers as
+ *       its own option (baseOptionLabel, e.g. "Regular" or "Full Plate").
  *     - variantPricing 'replace' (sizes, portions, persons, packages, meal deals): the chosen option's OWN
  *       price REPLACES the dish price. Its effective price is its sale price while that sale runs, otherwise
  *       its price. The dish price is never added, and the dish promo is never applied to an option
  *       (each option carries its own sale price), so no discount can be applied twice.
  *     - variantPricing 'add' (legacy: dishes saved before replacement pricing existed): the dish's
  *       effective price + the option's priceDelta. Kept so existing menus keep charging what they charged.
- *  2. Extras (add to the price): price × quantity, quantity 1..maxQty (default 1).
+ *  2. Extras (add to the price): effective price × quantity, quantity 1..maxQty (default 1). An extra's
+ *     effective price is its sale price when set and lower, otherwise its price.
  *  3. Choice groups (sauce, crust, meal upgrade, substitutions, toppings): each selected unit charges its
- *     option price (0 = included). The total selected in a group must be within minSelect..maxSelect.
+ *     option's effective price (0 = included). Groups of kind 'included' are always free.
+ *     The total selected in a group must be within minSelect..maxSelect.
  *     The group's first `freeQty` CHARGEABLE units are free, the lowest-priced ones first.
  *  4. Removable ingredients ("no onions") never change the price.
  *  5. Unit price = 1 + 2 + 3 (clamped at 0). Line total = unit price × quantity.
@@ -48,11 +52,14 @@ export interface MenuVariant {
   saleEndsAt?: string | Date | null;
   isActive?: boolean | null;
   recipeMultiplier?: number | null;
+  description?: string | null;
 }
 export interface MenuOption {
   _id?: Id;
   name: string;
+  description?: string | null;
   price?: number | null;
+  salePrice?: number | null; // lower price while set
   isAvailable?: boolean | null;
   maxQty?: number | null;
   ingredient?: RecipeRef | null;
@@ -64,6 +71,8 @@ export interface MenuChoiceGroup {
   maxSelect?: number | null;
   freeQty?: number | null;
   isActive?: boolean | null;
+  /** 'paid' (default): choices may cost extra (0 = included). 'included': every choice is free. */
+  kind?: 'paid' | 'included' | null;
   options: MenuOption[];
 }
 export interface MenuRemovable {
@@ -80,6 +89,8 @@ export interface MenuProduct {
   promoEndsAt?: string | Date | null;
   variantPricing?: 'replace' | 'add' | null;
   variantRequired?: boolean | null;
+  /** Name customers see for ordering at the base price when options are optional (e.g. "Regular", "Full Plate"). */
+  baseOptionLabel?: string | null;
   variants?: MenuVariant[];
   addons?: MenuOption[];
   modifierGroups?: MenuChoiceGroup[];
@@ -141,7 +152,17 @@ export function productEffectivePrice(p: Pick<MenuProduct, 'price' | 'promoPrice
 
 export const variantPricingMode = (p: Pick<MenuProduct, 'variantPricing'>): 'replace' | 'add' => (p.variantPricing === 'replace' ? 'replace' : 'add');
 export const activeVariants = (p: Pick<MenuProduct, 'variants'>) => (p.variants ?? []).filter((v) => v.isActive !== false);
+/**
+ * Must the customer choose an option? Saved explicitly on every dish since base-price ordering exists; dishes
+ * that never stored the flag keep their old behaviour (a choice was always required) until the owner reviews them.
+ */
 export const variantIsRequired = (p: Pick<MenuProduct, 'variantRequired'>) => p.variantRequired !== false;
+
+/** Price of an extra or choice: its sale price when set and lower than the price. */
+export function optionEffectivePrice(o: Pick<MenuOption, 'price' | 'salePrice'>): number {
+  const price = o.price ?? 0;
+  return o.salePrice != null && o.salePrice < price ? o.salePrice : price;
+}
 
 /** What a customer pays for this option before extras (rule 1). */
 export function variantEffectivePrice(p: MenuProduct, v: MenuVariant, now = new Date()): number {
@@ -238,7 +259,7 @@ export function resolveSelection(p: MenuProduct, selection: ItemSelection = {}, 
     const max = a.maxQty && a.maxQty > 0 ? a.maxQty : 1;
     if (!Number.isInteger(s.quantity) || s.quantity < 1) throw new SelectionError(`Invalid quantity of ${a.name}`);
     if (s.quantity > max) throw new SelectionError(`${name}: at most ${max} × ${a.name}`);
-    addons.push({ id: s.id, name: a.name, price: a.price ?? 0, quantity: s.quantity });
+    addons.push({ id: s.id, name: a.name, price: optionEffectivePrice(a), quantity: s.quantity });
     use(a.ingredient, s.quantity);
   }
 
@@ -263,7 +284,8 @@ export function resolveSelection(p: MenuProduct, selection: ItemSelection = {}, 
     // Free units go to the cheapest selected units first (stable for equal prices).
     const units = picked.flatMap((c) => {
       const o = g.options.find((x) => idOf(x) === c.optionId)!;
-      return Array.from({ length: c.quantity }, () => ({ id: c.optionId, name: o.name, price: o.price ?? 0 }));
+      const price = g.kind === 'included' ? 0 : optionEffectivePrice(o);
+      return Array.from({ length: c.quantity }, () => ({ id: c.optionId, name: o.name, price }));
     });
     units.sort((a, b) => a.price - b.price);
     let free = Math.max(0, g.freeQty ?? 0);
@@ -334,6 +356,7 @@ export function validateProductOptions(p: MenuProduct): string[] {
   for (const a of p.addons ?? []) {
     if (!a.name?.trim()) errs.push('Every extra needs a name');
     if (!int(a.price ?? 0) || (a.price ?? 0) < 0) errs.push(`Extra “${a.name}”: invalid price`);
+    if (a.salePrice != null && (!int(a.salePrice) || a.salePrice < 0 || a.salePrice >= (a.price ?? 0))) errs.push(`Extra “${a.name}”: the sale price must be lower than its price`);
     if (a.maxQty != null && (!int(a.maxQty) || a.maxQty < 1 || a.maxQty > 20)) errs.push(`Extra “${a.name}”: maximum quantity must be 1–20`);
   }
   for (const g of p.modifierGroups ?? []) {
@@ -351,6 +374,8 @@ export function validateProductOptions(p: MenuProduct): string[] {
     for (const o of g.options ?? []) {
       if (!o.name?.trim()) errs.push(`${label}: every choice needs a name`);
       if (!int(o.price ?? 0) || (o.price ?? 0) < 0) errs.push(`${label}: invalid price for “${o.name}”`);
+      if (g.kind === 'included' && ((o.price ?? 0) !== 0 || o.salePrice != null)) errs.push(`${label} is free/included, so “${o.name}” cannot have a price`);
+      if (o.salePrice != null && (!int(o.salePrice) || o.salePrice < 0 || o.salePrice >= (o.price ?? 0))) errs.push(`${label}: the sale price of “${o.name}” must be lower than its price`);
       if (o.maxQty != null && (!int(o.maxQty) || o.maxQty < 1 || o.maxQty > 20)) errs.push(`${label}: maximum per choice must be 1–20`);
     }
   }

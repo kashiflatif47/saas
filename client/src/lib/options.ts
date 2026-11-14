@@ -38,3 +38,31 @@ export function hasOptions(p: any) {
     (p.removableIngredients ?? []).some((r: any) => r.isAvailable !== false)
   );
 }
+
+/* ------------------------------------------------------------------ selection changes (pure, unit-tested) */
+// Every picker (storefront, POS, staff order entry) changes a selection only through these functions.
+
+/** Choose a full-price option, or `null` to order at the base price (the option list behaves like radio buttons). */
+export function chooseVariant(sel: ItemSelection, variantId: string | null): ItemSelection {
+  const { variantId: _old, ...rest } = sel;
+  return variantId ? { ...rest, variantId } : rest;
+}
+
+/** Set how many of one paid extra (0 removes it, and its charge). */
+export function setExtraQuantity(sel: ItemSelection, id: string, quantity: number): ItemSelection {
+  const n = normalizeSelection(sel);
+  return { ...sel, addonIds: undefined, addons: [...n.addons.filter((a) => a.id !== id), ...(quantity > 0 ? [{ id, quantity }] : [])] };
+}
+
+/** Set one choice of a group. `single` groups (pick one) replace the previous choice; 0 removes it. */
+export function setChoiceQuantity(sel: ItemSelection, groupId: string, optionId: string, quantity: number, single: boolean): ItemSelection {
+  const n = normalizeSelection(sel);
+  const rest = n.choices.filter((c) => (single ? c.groupId !== groupId : !(c.groupId === groupId && c.optionId === optionId)));
+  return { ...sel, choices: [...rest, ...(quantity > 0 ? [{ groupId, optionId, quantity }] : [])] };
+}
+
+/** Add or undo "No <ingredient>". Never changes the price. */
+export function toggleRemoval(sel: ItemSelection, id: string, removed: boolean): ItemSelection {
+  const ids = normalizeSelection(sel).removeIds.filter((x) => x !== id);
+  return { ...sel, removeIds: removed ? [...ids, id] : ids };
+}

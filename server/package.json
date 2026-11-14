@@ -21,7 +21,9 @@
     "superadmin": "tsx src/scripts/superadmin.ts",
     "superadmin:prod": "node dist/scripts/superadmin.js",
     "e2e": "tsx tests/e2e/journey.ts",
-    "test:local-routing": "tsx tests/e2e/local-routing.ts"
+    "test:local-routing": "tsx tests/e2e/local-routing.ts",
+    "audit:option-pricing": "tsx src/scripts/auditOptionPricing.ts",
+    "audit:option-pricing:prod": "node dist/scripts/auditOptionPricing.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
