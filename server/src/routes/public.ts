@@ -69,7 +69,8 @@ publicRouter.get('/storefront', ah(async (req, res) => {
 
 publicRouter.get('/menu', ah(async (req, res) => {
   const tz = req.tenant!.settings?.timezone ?? 'UTC';
-  const cats = (await Category.find({ tenantId: req.tenantId, isActive: true }).sort({ sortOrder: 1 }).lean()).filter((c) => categoryVisibleNow(c.schedule as any, tz));
+  const allActive = await Category.find({ tenantId: req.tenantId, isActive: true }).sort({ sortOrder: 1 }).lean();
+  const cats = allActive.filter((c) => categoryVisibleNow(c.schedule as any, tz));
   const visibleIds = new Set(cats.map((c) => String(c._id)));
   // Subcategory hidden if its parent is hidden.
   const categories = cats.filter((c) => !c.parentId || visibleIds.has(String(c.parentId)));
@@ -78,8 +79,17 @@ publicRouter.get('/menu', ah(async (req, res) => {
     .select('-recipe -tenantId')
     .sort({ sortOrder: 1, createdAt: -1 })
     .lean();
+  // Categories that have dishes but are outside their serving hours right now. The storefront shows their hours
+  // instead of "the menu is being prepared", which is reserved for a restaurant with no dishes at all.
+  const visible = new Set(categories.map((c) => String(c._id)));
+  const withDishes = new Set((await Product.distinct('categoryId', { tenantId: req.tenantId, isArchived: false })).map(String));
+  const closedNow = allActive
+    .filter((c) => !c.parentId && !visible.has(String(c._id)))
+    .filter((c) => withDishes.has(String(c._id)) || allActive.some((s) => String(s.parentId) === String(c._id) && withDishes.has(String(s._id))))
+    .map((c) => ({ _id: c._id, name: c.name, schedule: c.schedule }));
   res.json({
     categories,
+    closedNow,
     // Only what a guest can actually choose; inventory links stay private. Prices shown here come from the same
     // rules the server charges with (lib/menuPricing.ts); the order itself is re-priced on the server.
     products: products.map((p: any) => {

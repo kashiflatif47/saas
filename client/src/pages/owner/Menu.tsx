@@ -6,8 +6,10 @@ import { useAuth } from '../../store/auth';
 import { Badge, Button, Card, Empty, ErrorState, Field, Input, Loading, Modal, PageHeader, Select, Tabs, Textarea, Toggle, useFeedback } from '../../components/ui';
 import { cn, formatMoney, toLocalInputValue, toMajor, toMinor } from '../../lib/util';
 import { UtensilsCrossed as HeaderIcon } from 'lucide-react';
-import { ProductOptionsEditor, optionsToBody, optionsToForm } from './ProductOptionsEditor';
+import { ProductOptionsEditor } from './ProductOptionsEditor';
+import { blankProduct, productFormToBody, productToForm as toForm } from './productForm';
 import { displayPrice } from '../../offline/menuPricing';
+import { MissingAssets } from '../../components/MissingAssets';
 
 type Lang = 'en' | 'ur' | 'ar';
 const LANGS: { k: Lang; label: string }[] = [{ k: 'en', label: 'English' }, { k: 'ur', label: 'اردو' }, { k: 'ar', label: 'العربية' }];
@@ -85,6 +87,7 @@ export default function MenuPage() {
           </>
         }
       />
+      <MissingAssets kinds={['product', 'category']} />
       <div className="grid gap-6 lg:grid-cols-[280px_1fr] [&>*]:min-w-0">
         <Card pad={false} className="h-fit">
           <ul className="p-2">
@@ -172,7 +175,8 @@ function CatRow({ c, selected, onSelect, onEdit, onDelete, onMove }: any) {
     <div className={cn('group flex items-center gap-1 rounded-lg', selected === c._id ? 'bg-brand/10' : 'hover:bg-stone-100')}>
       <button onClick={() => onSelect(c._id)} className="flex-1 truncate px-3 py-2 text-start text-sm">
         <span className={cn(!c.isActive && 'text-stone-400 line-through')}>{c.name.en}</span>
-        {c.schedule?.days?.length > 0 && <span className="ms-1 text-[10px] text-stone-400">⏱</span>}
+        {c.schedule?.days?.length > 0 && <span className="ms-1 text-[10px] text-stone-400" title={`Served ${c.schedule.from || ''}–${c.schedule.to || ''}`}>⏱</span>}
+        {c.isActive && c.visibleNow === false && <span className="ms-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800" title="Outside its serving hours: guests cannot see these dishes right now">Hidden now</span>}
       </button>
       <div className="flex transition lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100">
         <button className="p-1 text-stone-400 hover:text-stone-800" onClick={() => onMove(c._id, -1)} aria-label="Move up"><ArrowUp className="h-3.5 w-3.5" /></button>
@@ -292,20 +296,6 @@ function CategoryModal({ value, onClose, categories, stations, onSaved }: any) {
   );
 }
 
-function blankProduct(categoryId?: string) {
-  return { categoryId: categoryId ?? '', name: { en: '' }, description: {}, price: '', promoPrice: '', promoEndsAt: '', ...optionsToForm({}, 2), tags: '', isFeatured: false, isAvailable: true, trackStock: false, stockQty: 0, recipe: [], prepMinutes: 10, images: [] };
-}
-function toForm(p: any, dec: number) {
-  return {
-    ...p,
-    price: toMajor(p.price, dec),
-    promoPrice: p.promoPrice != null ? toMajor(p.promoPrice, dec) : '',
-    promoEndsAt: toLocalInputValue(p.promoEndsAt), // local time, matching how the input value is parsed back
-    ...optionsToForm(p, dec),
-    tags: (p.tags ?? []).join(', '),
-  };
-}
-
 function ProductModal({ value, onClose, categories, onChanged }: any) {
   const fb = useFeedback();
   const { tenant, hasFeature } = useAuth();
@@ -324,22 +314,7 @@ function ProductModal({ value, onClose, categories, onChanged }: any) {
   const save = async () => {
     setBusy(true);
     try {
-      const body = {
-        categoryId: v.categoryId,
-        name: v.name,
-        description: v.description,
-        price: toMinor(v.price, dec),
-        promoPrice: v.promoPrice === '' ? null : toMinor(v.promoPrice, dec),
-        promoEndsAt: v.promoEndsAt ? new Date(v.promoEndsAt).toISOString() : null,
-        ...optionsToBody(v, dec), // options, extras, choice groups, removable ingredients (explicit pricing mode)
-        tags: String(v.tags).split(',').map((s) => s.trim()).filter(Boolean),
-        isFeatured: v.isFeatured,
-        isAvailable: v.isAvailable,
-        trackStock: v.trackStock,
-        stockQty: Number(v.stockQty) || 0,
-        recipe: v.recipe.filter((r: any) => r.inventoryItemId && Number(r.quantity) > 0).map((r: any) => ({ inventoryItemId: r.inventoryItemId, quantity: Number(r.quantity) })),
-        prepMinutes: Number(v.prepMinutes) || 0,
-      };
+      const body = productFormToBody(v, dec);
       const saved = v._id ? await api.patch(`/api/staff/menu/products/${v._id}`, body) : await api.post('/api/staff/menu/products', body);
       fb.ok(v._id ? 'Dish saved' : 'Dish created — you can now add photos');
       onChanged();

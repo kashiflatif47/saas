@@ -17,7 +17,7 @@ type Money = (n: number) => string;
 export default function MenuView({ store }: { store: StoreInfo }) {
   const { t, pick, lang } = useI18n();
   const cart = useCart();
-  const [menu, setMenu] = useState<{ categories: any[]; products: any[] } | null>(null);
+  const [menu, setMenu] = useState<{ categories: any[]; products: any[]; closedNow?: { _id: string; name: any; schedule?: { days?: number[]; from?: string; to?: string } }[] } | null>(null);
   const [reviews, setReviews] = useState<any[]>([]);
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
@@ -198,7 +198,16 @@ export default function MenuView({ store }: { store: StoreInfo }) {
           )}
         </div>
 
-        {menu.products.length === 0 && <p className="py-24 text-center opacity-70" role="status">{t('menuEmpty')}</p>}
+        {/* "Being prepared" only when the restaurant has no dishes at all; dishes outside their serving hours show the hours. */}
+        {menu.products.length === 0 && !menu.closedNow?.length && <p className="py-24 text-center opacity-70" role="status">{t('menuEmpty')}</p>}
+        {(menu.closedNow?.length ?? 0) > 0 && (
+          <div className={cn('mx-auto max-w-xl text-center', menu.products.length === 0 ? 'py-20' : 'py-6')} role="status">
+            {menu.products.length === 0 && <p className="font-display text-xl font-semibold">{t('notServingNow')}</p>}
+            <ul className="mt-2 space-y-1 text-sm opacity-75">
+              {menu.closedNow!.map((c) => <li key={c._id}><span className="font-medium">{pick(c.name)}</span> · {servingHours(c.schedule, lang, t('everyDay'))}</li>)}
+            </ul>
+          </div>
+        )}
         {menu.products.length > 0 && q.trim() !== '' && byCat.size === 0 && <p className="py-20 text-center opacity-70" role="status">{t('noResults')}</p>}
 
         {shownCats.map((c) => (
@@ -346,6 +355,15 @@ function DishCard({ p, money, onOpen }: { p: any; money: Money; onOpen: () => vo
       </div>
     </button>
   );
+}
+
+/** "Thu, Fri, Sat · 07:59–00:00" in the guest's language (empty days = every day; no times = all day). */
+function servingHours(s: { days?: number[]; from?: string; to?: string } | undefined, lang: string, everyDay: string) {
+  const locale = lang === 'en' ? 'en' : lang === 'ur' ? 'ur-PK' : 'ar';
+  const fmt = new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' });
+  // 2023-01-01 was a Sunday (day 0), matching the schedule's day numbers.
+  const days = s?.days?.length && s.days.length < 7 ? [...s.days].sort((a, b) => a - b).map((d) => fmt.format(new Date(Date.UTC(2023, 0, 1 + d)))).join(', ') : everyDay;
+  return s?.from && s?.to ? `${days} · ${s.from}–${s.to}` : days;
 }
 
 /** Card price: cheapest purchasable configuration ("from" when options cost more). Server-computed when available. */

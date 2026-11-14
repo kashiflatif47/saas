@@ -1,4 +1,5 @@
 import { clsx, type ClassValue } from 'clsx';
+export { toMinor, toMajor, toLocalInputValue } from './money';
 import { buildTenantUrl, isCustomDomain, lowercaseTenantPath, parseSiteContext, stripBasename, type SiteContext } from './site';
 
 export type { SiteContext } from './site';
@@ -71,8 +72,6 @@ export function formatMoney(minor: number | undefined | null, currency = 'PKR', 
   }
 }
 
-export const toMinor = (major: string | number, decimals = 2) => Math.round(Number(major || 0) * 10 ** decimals);
-export const toMajor = (minor: number | undefined | null, decimals = 2) => ((minor ?? 0) / 10 ** decimals).toFixed(decimals);
 
 export function hexToRgbTriplet(hex: string): string {
   const h = hex.replace('#', '');
@@ -196,14 +195,6 @@ export function downloadBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-/** Formats a Date for an <input type="datetime-local"> in the browser's LOCAL time zone. */
-export function toLocalInputValue(d: string | Date | null | undefined): string {
-  if (!d) return '';
-  const date = new Date(d);
-  if (Number.isNaN(date.getTime())) return '';
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
 
 export const ORDER_TYPE_LABEL: Record<string, string> = { dine_in: 'Dine-in', takeaway: 'Takeaway', pickup: 'Pickup', delivery: 'Delivery' };
 

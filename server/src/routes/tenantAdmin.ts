@@ -17,10 +17,16 @@ import { getOnlineProvider } from '../services/paymentService';
 import { isValidTimeZone } from '../lib/timezone';
 import { disconnectUserSockets } from '../sockets';
 import { TENANT_ROLES, PERMISSIONS, roleHas, type Permission } from '../config/permissions';
+import { checkTenantAssets } from '../services/assetCheck';
 
 export const tenantAdminRouter = Router();
 
 /* ------------------------------ Profile & settings ------------------------------ */
+/** Read-only: uploaded images referenced by this restaurant whose files are missing from the server storage. */
+tenantAdminRouter.get('/tenant/asset-check', can('branding:manage', 'menu:manage'), ah(async (req, res) => {
+  res.json(await checkTenantAssets(req.tenantId!));
+}));
+
 tenantAdminRouter.get('/tenant', ah(async (req, res) => {
   const t = await Tenant.findById(req.tenantId).populate('subscription.planId', 'name code features limits priceMonthly currency').lean();
   if (!t) throw notFound();

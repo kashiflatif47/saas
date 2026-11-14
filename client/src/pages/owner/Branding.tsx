@@ -6,6 +6,7 @@ import { useAuth } from '../../store/auth';
 import { Button, Card, ErrorState, Field, Input, Loading, PageHeader, Select, Tabs, Textarea, useFeedback } from '../../components/ui';
 import { applyTheme, contrastRatio, inkFor } from '../../lib/util';
 import { Palette as HeaderIcon } from 'lucide-react';
+import { MissingAssets } from '../../components/MissingAssets';
 
 const DEFAULT_THEME = { primary: '#B4532A', secondary: '#1F2937', accent: '#E9B44C', background: '#FFFBF5', surface: '#FFFFFF', text: '#1C1917', fontHeading: 'Fraunces', fontBody: 'Inter', radius: 14 };
 const PRESETS: { name: string; theme: Partial<typeof DEFAULT_THEME> }[] = [
@@ -79,6 +80,7 @@ export default function Branding() {
   return (
     <>
       <PageHeader icon={HeaderIcon} accent="brand" title="Branding & website" subtitle="Your logo, colours and homepage text — preview updates live" actions={<Button onClick={save} loading={busy === 'save'}>Publish changes</Button>} />
+      <MissingAssets kinds={['branding']} />
       <div className="grid gap-6 xl:grid-cols-[1fr_440px] [&>*]:min-w-0">
         <div className="space-y-6">
           <Card title="Images">

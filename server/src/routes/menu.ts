@@ -10,6 +10,7 @@ import { uploadMemory, storeTenantImage, deleteTenantImage } from '../middleware
 import { audit } from '../services/audit';
 import { crudRouter } from './crudFactory';
 import { validateProductOptions } from '../lib/menuPricing';
+import { categoryVisibleNow } from './public';
 import { emit } from '../sockets';
 
 export const menuRouter = Router();
@@ -57,7 +58,10 @@ async function assertRefs(tenantId: any, body: any, selfId?: string) {
 }
 
 menuRouter.get('/categories', can('menu:view'), ah(async (req, res) => {
-  res.json({ items: await Category.find({ tenantId: req.tenantId }).sort({ sortOrder: 1, createdAt: 1 }).lean() });
+  // visibleNow: whether guests can see it at this moment (its schedule, in the restaurant's time zone).
+  const tz = req.tenant!.settings?.timezone ?? 'UTC';
+  const items = await Category.find({ tenantId: req.tenantId }).sort({ sortOrder: 1, createdAt: 1 }).lean();
+  res.json({ items: items.map((c) => ({ ...c, visibleNow: c.isActive && categoryVisibleNow(c.schedule as any, tz) })) });
 }));
 
 menuRouter.post('/categories', can('menu:manage'), validateBody(categorySchema), ah(async (req, res) => {

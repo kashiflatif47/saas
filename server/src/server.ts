@@ -1,4 +1,5 @@
 import http from 'node:http';
+import path from 'node:path';
 import mongoose from 'mongoose';
 import { env } from './config/env';
 import { connectDb } from './db/connect';
@@ -16,6 +17,11 @@ async function main() {
   const sa = await ensureSuperAdmin(env.SUPERADMIN_EMAIL, env.SUPERADMIN_PASSWORD);
   if (sa === 'created') console.info(`[BOOT] created super admin ${env.SUPERADMIN_EMAIL} — change the password after first login`);
   if (sa === 'skipped') console.warn('[BOOT] no super admin exists and SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD are not set — see TABLESAAS_PRODUCTION_GUIDE.md');
+  if (env.NODE_ENV === 'production' && !path.isAbsolute(env.UPLOAD_DIR)) {
+    // Uploaded logos and dish photos live in this folder. Inside the app folder they can be lost when a
+    // deployment replaces it; the records keep pointing at files that no longer exist.
+    console.warn(`[BOOT] UPLOAD_DIR="${env.UPLOAD_DIR}" resolves to ${path.resolve(env.UPLOAD_DIR)} (inside the app). Set UPLOAD_DIR to an absolute folder outside the deployment so uploads survive redeploys.`);
+  }
   const app = createApp();
   const server = http.createServer(app);
   const io = initSockets(server);
