@@ -153,6 +153,33 @@ export const api = {
     const res = await request<Response>(p, { raw: true });
     return URL.createObjectURL(await res.blob());
   },
+  /** Multipart upload with progress (0–1). Same auth, headers and error format as request(); renews the session once on 401. */
+  uploadWithProgress<T = any>(p: string, file: File, fields: Record<string, string>, onProgress: (f: number) => void, retry = true): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_URL}${apiPath(p)}`);
+      xhr.withCredentials = true;
+      for (const [k, v] of Object.entries(siteHeaders())) xhr.setRequestHeader(k, v);
+      if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+      xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+      xhr.onerror = () => reject(new ApiError(0, 'No connection to the server', 'NETWORK'));
+      xhr.onload = async () => {
+        let j: any = null;
+        try {
+          j = JSON.parse(xhr.responseText);
+        } catch {
+          /* non-JSON */
+        }
+        if (xhr.status === 401 && retry && (await refresh())) return resolve(api.uploadWithProgress<T>(p, file, fields, onProgress, false));
+        if (xhr.status >= 200 && xhr.status < 300) return resolve(j as T);
+        reject(new ApiError(xhr.status, j?.error?.message ?? `Upload failed (${xhr.status})`, j?.error?.code, j?.error?.details));
+      };
+      const fd = new FormData();
+      for (const [k, v] of Object.entries(fields)) fd.append(k, v);
+      fd.append('file', file);
+      xhr.send(fd);
+    });
+  },
 };
 
 export const assetUrl = (u?: string | null) => (!u ? '' : u.startsWith('http') ? u : `${API_URL}${u}`);

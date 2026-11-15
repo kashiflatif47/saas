@@ -6,11 +6,12 @@ import { Plan } from '../models/platform';
 import { ah, badRequest, notFound, paymentRequired } from '../lib/errors';
 import { can } from '../middleware/auth';
 import { checkIdParams, validateBody, validateQuery, zI18n, zI18nRequired, zMoney, zPage, zId, zHex } from '../middleware/validate';
-import { uploadMemory, storeTenantImage, deleteTenantImage } from '../middleware/upload';
+import { uploadMemory } from '../middleware/upload';
+import { attachableUrl, mediaUrl, retireUrl, uploadAsset } from '../services/media';
 import { audit } from '../services/audit';
 import { crudRouter } from './crudFactory';
 import { validateProductOptions } from '../lib/menuPricing';
-import { categoryVisibleNow } from './public';
+import { availabilityAt, effectiveSchedule, scheduleClock } from '../lib/schedule';
 import { emit } from '../sockets';
 
 export const menuRouter = Router();
@@ -58,10 +59,18 @@ async function assertRefs(tenantId: any, body: any, selfId?: string) {
 }
 
 menuRouter.get('/categories', can('menu:view'), ah(async (req, res) => {
-  // visibleNow: whether guests can see it at this moment (its schedule, in the restaurant's time zone).
+  // Serving hours: whether its dishes can be ORDERED right now (they are always shown), in the restaurant's
+  // time zone. A subcategory without hours follows its parent.
   const tz = req.tenant!.settings?.timezone ?? 'UTC';
   const items = await Category.find({ tenantId: req.tenantId }).sort({ sortOrder: 1, createdAt: 1 }).lean();
-  res.json({ items: items.map((c) => ({ ...c, visibleNow: c.isActive && categoryVisibleNow(c.schedule as any, tz) })) });
+  const byId = new Map(items.map((c) => [String(c._id), c]));
+  const now = scheduleClock.now();
+  res.json({
+    items: items.map((c) => {
+      const s = effectiveSchedule({}, c as any, c.parentId ? (byId.get(String(c.parentId)) as any) : null);
+      return { ...c, hasSchedule: !!s, ...availabilityAt(s, tz, now) };
+    }),
+  });
 }));
 
 menuRouter.post('/categories', can('menu:manage'), validateBody(categorySchema), ah(async (req, res) => {
@@ -104,14 +113,38 @@ menuRouter.post('/categories/:id/image', can('menu:manage'), checkIdParams, uplo
   if (!req.file) throw badRequest('No file uploaded');
   const c = await Category.findOne({ tenantId: req.tenantId, _id: req.params.id });
   if (!c) throw notFound('Category not found');
-  const url = await storeTenantImage(String(req.tenantId), 'categories', req.file);
-  if (c.imageUrl) await deleteTenantImage(String(req.tenantId), c.imageUrl);
+  // Stored and verified in permanent storage before the category changes; the previous image is retired, not deleted.
+  const a = await uploadAsset({ tenantId: req.tenantId!, buffer: req.file.buffer, purpose: 'category', label: c.name?.en, actor: { id: req.user!.id, name: req.user!.name } });
+  const prev = c.imageUrl;
+  c.imageUrl = mediaUrl(a._id);
+  await c.save();
+  if (prev) await retireUrl(req.tenantId!, prev);
+  res.json({ url: c.imageUrl });
+}));
+
+menuRouter.put('/categories/:id/image', can('menu:manage'), checkIdParams, validateBody(z.object({ assetId: zId })), ah(async (req, res) => {
+  const c = await Category.findOne({ tenantId: req.tenantId, _id: req.params.id });
+  if (!c) throw notFound('Category not found');
+  const url = await attachableUrl(req.tenantId!, req.body.assetId);
+  const prev = c.imageUrl;
   c.imageUrl = url;
   await c.save();
+  if (prev && prev !== url) await retireUrl(req.tenantId!, prev);
   res.json({ url });
 }));
 
+menuRouter.delete('/categories/:id/image', can('menu:manage'), checkIdParams, ah(async (req, res) => {
+  const c = await Category.findOne({ tenantId: req.tenantId, _id: req.params.id });
+  if (!c) throw notFound('Category not found');
+  const prev = c.imageUrl;
+  c.imageUrl = undefined;
+  await c.save();
+  if (prev) await retireUrl(req.tenantId!, prev);
+  res.json({ ok: true });
+}));
+
 /* ------------------------------ Products ------------------------------ */
+const zHHmm = z.string().regex(/^(([01]\d|2[0-3]):[0-5]\d)?$/, 'Use HH:mm').optional();
 const zIngredient = z.object({ inventoryItemId: zId, quantity: z.number().positive().max(100000) });
 const productSchema = z.object({
   categoryId: zId,
@@ -155,6 +188,8 @@ const productSchema = z.object({
   stockQty: z.number().int().min(0).max(1_000_000).optional(),
   recipe: z.array(z.object({ inventoryItemId: zId, quantity: z.number().positive().max(100000) })).max(30).optional(),
   prepMinutes: z.number().int().min(0).max(600).optional(),
+  scheduleOverride: z.boolean().optional(),
+  schedule: z.object({ days: z.array(z.number().int().min(0).max(6)).max(7).default([]), from: zHHmm, to: zHHmm }).optional(),
   sortOrder: z.number().int().min(0).optional(),
 });
 
@@ -252,7 +287,20 @@ menuRouter.post('/products/:id/images', can('menu:manage'), checkIdParams, uploa
   const p = await Product.findOne({ tenantId: req.tenantId, _id: req.params.id });
   if (!p) throw notFound('Product not found');
   if (p.images.length + files.length > 8) throw badRequest('A product can have at most 8 images');
-  for (const f of files) p.images.push(await storeTenantImage(String(req.tenantId), 'products', f));
+  // Each photo is stored and verified first; a failure leaves the dish exactly as it was.
+  const urls: string[] = [];
+  for (const f of files) urls.push(mediaUrl((await uploadAsset({ tenantId: req.tenantId!, buffer: f.buffer, purpose: 'product', label: p.name?.en, actor: { id: req.user!.id, name: req.user!.name } }))._id));
+  p.images.push(...urls);
+  await p.save();
+  res.json({ images: p.images });
+}));
+
+menuRouter.post('/products/:id/images/attach', can('menu:manage'), checkIdParams, validateBody(z.object({ assetId: zId })), ah(async (req, res) => {
+  const p = await Product.findOne({ tenantId: req.tenantId, _id: req.params.id });
+  if (!p) throw notFound('Product not found');
+  if (p.images.length >= 8) throw badRequest('A product can have at most 8 images');
+  const url = await attachableUrl(req.tenantId!, req.body.assetId);
+  if (!p.images.includes(url)) p.images.push(url);
   await p.save();
   res.json({ images: p.images });
 }));
@@ -263,7 +311,7 @@ menuRouter.delete('/products/:id/images', can('menu:manage'), checkIdParams, val
   if (!p.images.includes(req.body.url)) throw notFound('Image not found');
   p.images = p.images.filter((u) => u !== req.body.url);
   await p.save();
-  await deleteTenantImage(String(req.tenantId), req.body.url);
+  await retireUrl(req.tenantId!, req.body.url); // kept in storage and restorable; never deleted here
   res.json({ images: p.images });
 }));
 

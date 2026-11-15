@@ -86,7 +86,9 @@ test('a new dish from the editor saves, accepts a photo and appears on the store
   const up = await request(app).post(`/api/staff/menu/products/${ids.karahi}/images`).set(auth(T.token)).attach('files', PNG, 'karahi.png');
   assert.equal(up.status, 200, JSON.stringify(up.body));
   const url = up.body.images[0];
-  assert.equal((await request(app).get(url)).status, 200, 'uploaded photo is served');
+  const media = await request(app).get(url);
+  assert.equal(media.status, 302, 'stable /media address');
+  assert.equal((await request(app).get(media.headers.location)).status, 200, 'uploaded photo is served');
 
   const menu = (await request(app).get(pub('/menu'))).body;
   const shown = menu.products.find((p: any) => p._id === ids.karahi);
@@ -112,7 +114,7 @@ test('an invalid dish is refused with a message the admin can act on (not a sile
   assert.match(r.body.error.message, /Option “Half”: the sale price must be lower than its price/);
 });
 
-test('dishes outside their serving hours: storefront gets the hours instead of an empty "coming soon" menu', async () => {
+test('dishes outside their serving hours stay on the storefront, marked not orderable (never an empty "coming soon" menu)', async () => {
   // A schedule that is never "now": yesterday's weekday only.
   const notToday = (new Date().getUTCDay() + 5) % 7; // two days ago, in any time zone
   const cat = await request(app).post('/api/staff/menu/categories').set(auth(T.token)).send({ name: { en: 'Breakfast' }, schedule: { days: [notToday], from: '07:59', to: '11:00' } });
@@ -121,11 +123,13 @@ test('dishes outside their serving hours: storefront gets the hours instead of a
   assert.equal((await save(hp)).status, 201);
 
   const menu = (await request(app).get(pub('/menu'))).body;
-  assert.ok(!menu.products.some((p: any) => p.name.en === 'Halwa Puri'), 'hidden right now');
-  assert.deepEqual(menu.closedNow.map((c: any) => [c.name.en, c.schedule.from, c.schedule.to]), [['Breakfast', '07:59', '11:00']]);
+  const hp2 = menu.products.find((p: any) => p.name.en === 'Halwa Puri');
+  assert.ok(hp2, 'still shown');
+  assert.equal(hp2.availability.isAvailableNow, false);
+  assert.deepEqual([hp2.availability.schedule.from, hp2.availability.schedule.to], ['07:59', '11:00']);
   const staffCats = (await request(app).get('/api/staff/menu/categories').set(auth(T.token))).body.items;
-  assert.equal(staffCats.find((c: any) => c.name.en === 'Breakfast').visibleNow, false, 'admin sees "Hidden now"');
-  assert.equal(staffCats.find((c: any) => c.name.en === 'Main Course').visibleNow, true);
+  assert.equal(staffCats.find((c: any) => c.name.en === 'Breakfast').openNow, false, 'admin sees "Closed now"');
+  assert.equal(staffCats.find((c: any) => c.name.en === 'Main Course').openNow, true);
 });
 
 test('missing uploaded files are reported (read-only), present ones are not; records are not changed', async () => {
@@ -135,7 +139,7 @@ test('missing uploaded files are reported (read-only), present ones are not; rec
   assert.ok(missing.some((u: string) => u.endsWith('lost-in-redeploy.png')), 'the lost file is reported');
   const karahiImg = (await getProduct(ids.karahi)).images[0];
   assert.ok(!missing.includes(karahiImg), 'an existing file is not reported');
-  assert.ok(fs.existsSync(uploadPathOf(T.tenantId, karahiImg)!));
+  assert.ok(fs.existsSync(uploadPathOf(T.tenantId, (await request(app).get(karahiImg)).headers.location)!), 'the stored file exists');
   assert.equal(uploadPathOf(T.tenantId, `/uploads/${T.tenantId}/../../etc/passwd`), null, 'never looks outside the restaurant folder');
   assert.ok((await getProduct(ids.legacy)).images[0].endsWith('lost-in-redeploy.png'), 'the reference is kept for re-upload/restore');
 });

@@ -46,6 +46,28 @@ const schema = z.object({
    * Requests that arrive on a restaurant subdomain or custom domain are still served in both modes.
    */
   TENANT_URL_MODE: z.enum(['path', 'subdomain']).default('path'),
+  /*
+   * Media storage (see docs/STORAGE_AND_BACKUP.md). Uploaded images must live OUTSIDE the deployment folder.
+   * Credentials can be set here (they then take precedence and cannot be changed in the console) or in the
+   * platform console (stored encrypted with ENCRYPTION_KEY). Secrets are never sent to browsers or logged.
+   */
+  STORAGE_DEFAULT_PROVIDER: z.enum(['', 'cloudinary', 's3', 'local']).default(''),
+  CLOUDINARY_CLOUD_NAME: z.string().default(''),
+  CLOUDINARY_API_KEY: z.string().default(''),
+  CLOUDINARY_API_SECRET: z.string().default(''),
+  CLOUDINARY_FOLDER: z.string().default('tablesaas'),
+  /** API base (only for tests or an approved proxy). */
+  CLOUDINARY_API_BASE_URL: z.string().default('https://api.cloudinary.com'),
+  S3_ENDPOINT: z.string().default(''), // e.g. https://<account>.r2.cloudflarestorage.com or https://s3.eu-central-1.amazonaws.com
+  S3_REGION: z.string().default(''), // "auto" for Cloudflare R2
+  S3_BUCKET: z.string().default(''),
+  S3_ACCESS_KEY_ID: z.string().default(''),
+  S3_SECRET_ACCESS_KEY: z.string().default(''),
+  S3_PUBLIC_BASE_URL: z.string().default(''), // CDN / public bucket URL; empty = served through signed redirects
+  S3_FORCE_PATH_STYLE: z.string().default('true').transform((v) => v !== 'false'),
+  S3_PRIVATE: z.string().default('false').transform((v) => v === 'true'),
+  /** Production only: confirms UPLOAD_DIR is a persistent folder outside the app that the host keeps across releases. */
+  LOCAL_UPLOADS_PERSISTENT: z.string().default('false').transform((v) => v === 'true'),
   /** Request access log (method, path, status, duration — never bodies or headers). */
   LOG_REQUESTS: z
     .string()

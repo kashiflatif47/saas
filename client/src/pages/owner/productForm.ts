@@ -61,7 +61,7 @@ export function optionsToBody(v: any, dec: number) {
 
 
 export function blankProduct(categoryId?: string) {
-  return { categoryId: categoryId ?? '', name: { en: '' }, description: {}, price: '', promoPrice: '', promoEndsAt: '', ...optionsToForm({}, 2), tags: '', isFeatured: false, isAvailable: true, trackStock: false, stockQty: 0, recipe: [], prepMinutes: 10, images: [] };
+  return { categoryId: categoryId ?? '', name: { en: '' }, description: {}, price: '', promoPrice: '', promoEndsAt: '', ...optionsToForm({}, 2), tags: '', isFeatured: false, isAvailable: true, trackStock: false, stockQty: 0, recipe: [], prepMinutes: 10, images: [], scheduleOverride: false, schedule: { days: [], from: '', to: '' } };
 }
 export function productToForm(p: any, dec: number) {
   return {
@@ -71,6 +71,8 @@ export function productToForm(p: any, dec: number) {
     promoEndsAt: toLocalInputValue(p.promoEndsAt), // local time, matching how the input value is parsed back
     ...optionsToForm(p, dec),
     tags: (p.tags ?? []).join(', '),
+    scheduleOverride: !!p.scheduleOverride,
+    schedule: { days: p.schedule?.days ?? [], from: p.schedule?.from ?? '', to: p.schedule?.to ?? '' },
   };
 }
 
@@ -92,5 +94,8 @@ export function productFormToBody(v: any, dec: number) {
     stockQty: Number(v.stockQty) || 0,
     recipe: v.recipe.filter((r: any) => r.inventoryItemId && Number(r.quantity) > 0).map((r: any) => ({ inventoryItemId: r.inventoryItemId, quantity: Number(r.quantity) })),
     prepMinutes: Number(v.prepMinutes) || 0,
+    // Serving hours: off = the category's hours; on = this dish's own (empty = 24/7). Ordering only, never visibility.
+    scheduleOverride: !!v.scheduleOverride,
+    schedule: { days: v.schedule?.days ?? [], from: v.schedule?.from ?? '', to: v.schedule?.to ?? '' },
   };
 }

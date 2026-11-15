@@ -17,6 +17,9 @@ import { tenantAppUrl, tenantLoginUrl } from '../lib/appUrl';
 import { disconnectTenantStaffSockets, disconnectUserSockets } from '../sockets';
 
 import { isValidTimeZone } from '../lib/timezone';
+import { StorageConfig } from '../models/storage';
+import { encryptSecret } from '../lib/crypto';
+import { invalidateStorageConfig, storageStatus, testProvider } from '../services/media';
 
 export const superAdminRouter = Router();
 
@@ -313,4 +316,72 @@ superAdminRouter.get('/audit', validateQuery(zPage.extend({ tenantId: z.string()
     AuditLog.countDocuments(filter),
   ]);
   res.json({ items, total, page: q.page, limit: q.limit });
+}));
+
+/* ------------------------------- Media storage ------------------------------- */
+// Platform-wide image storage (Cloudinary / S3-compatible). Secrets are encrypted at rest and NEVER returned.
+
+const storageBody = z.object({
+  defaultProvider: z.enum(['', 'cloudinary', 's3', 'local']).optional(),
+  cloudinary: z.object({
+    cloudName: z.string().trim().regex(/^[a-z0-9_-]{1,64}$/i, 'Invalid cloud name'),
+    apiKey: z.string().trim().min(1).max(64),
+    apiSecret: z.string().trim().min(1).max(128).optional(), // omitted = keep the stored secret
+    folder: z.string().trim().regex(/^[a-z0-9_/-]{0,60}$/i).optional(),
+  }).optional(),
+  s3: z.object({
+    endpoint: z.string().trim().url().refine((u) => u.startsWith('https://') || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/.test(u), 'Use an https endpoint'),
+    region: z.string().trim().max(40).default(''),
+    bucket: z.string().trim().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, 'Invalid bucket name'),
+    accessKeyId: z.string().trim().min(1).max(128),
+    secretAccessKey: z.string().trim().min(1).max(256).optional(),
+    publicBaseUrl: z.string().trim().url().refine((u) => u.startsWith('https://'), 'Use an https address').or(z.literal('')).default(''),
+    forcePathStyle: z.boolean().default(true),
+    privateBucket: z.boolean().default(false),
+  }).optional(),
+});
+
+async function storageView() {
+  const doc: any = await StorageConfig.findById('storage').select('+cloudinary.apiSecretEnc +s3.secretAccessKeyEnc').lean();
+  return {
+    status: await storageStatus(),
+    config: {
+      defaultProvider: doc?.defaultProvider ?? '',
+      cloudinary: doc?.cloudinary?.cloudName ? { cloudName: doc.cloudinary.cloudName, apiKey: doc.cloudinary.apiKey, folder: doc.cloudinary.folder ?? '', hasSecret: !!doc.cloudinary.apiSecretEnc } : null,
+      s3: doc?.s3?.endpoint ? { endpoint: doc.s3.endpoint, region: doc.s3.region ?? '', bucket: doc.s3.bucket, accessKeyId: doc.s3.accessKeyId, publicBaseUrl: doc.s3.publicBaseUrl ?? '', forcePathStyle: doc.s3.forcePathStyle !== false, privateBucket: !!doc.s3.privateBucket, hasSecret: !!doc.s3.secretAccessKeyEnc } : null,
+    },
+    // Set in the server environment: shown read-only and not editable here.
+    fromEnvironment: { defaultProvider: !!env.STORAGE_DEFAULT_PROVIDER, cloudinary: !!env.CLOUDINARY_API_SECRET, s3: !!env.S3_SECRET_ACCESS_KEY },
+  };
+}
+
+superAdminRouter.get('/storage', ah(async (_req, res) => res.json(await storageView())));
+
+superAdminRouter.put('/storage', validateBody(storageBody), ah(async (req, res) => {
+  const b = req.body;
+  const existing: any = await StorageConfig.findById('storage').select('+cloudinary.apiSecretEnc +s3.secretAccessKeyEnc').lean();
+  const set: Record<string, unknown> = { updatedBy: req.user!.name };
+  if (b.defaultProvider !== undefined) set.defaultProvider = b.defaultProvider;
+  if (b.cloudinary) {
+    if (env.CLOUDINARY_API_SECRET) throw conflict('Cloudinary is configured in the server environment');
+    const secret = b.cloudinary.apiSecret ? encryptSecret(b.cloudinary.apiSecret, env.ENCRYPTION_KEY) : existing?.cloudinary?.apiSecretEnc;
+    if (!secret) throw badRequest('Enter the Cloudinary API secret');
+    set.cloudinary = { cloudName: b.cloudinary.cloudName, apiKey: b.cloudinary.apiKey, folder: b.cloudinary.folder || 'tablesaas', apiSecretEnc: secret };
+  }
+  if (b.s3) {
+    if (env.S3_SECRET_ACCESS_KEY) throw conflict('Cloud storage is configured in the server environment');
+    const secret = b.s3.secretAccessKey ? encryptSecret(b.s3.secretAccessKey, env.ENCRYPTION_KEY) : existing?.s3?.secretAccessKeyEnc;
+    if (!secret) throw badRequest('Enter the secret access key');
+    const { secretAccessKey: _s, ...rest } = b.s3;
+    set.s3 = { ...rest, secretAccessKeyEnc: secret };
+  }
+  await StorageConfig.updateOne({ _id: 'storage' }, { $set: set }, { upsert: true });
+  invalidateStorageConfig();
+  // Audit records WHAT changed, never the values of secrets.
+  await audit(req, 'platform.storage_update', 'StorageConfig', null as any, { fields: Object.keys(set).filter((k) => k !== 'updatedBy') }, null);
+  res.json(await storageView());
+}));
+
+superAdminRouter.post('/storage/test', validateBody(z.object({ provider: z.enum(['cloudinary', 's3', 'local']) })), ah(async (req, res) => {
+  res.json(await testProvider(req.body.provider));
 }));

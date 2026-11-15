@@ -7,7 +7,8 @@ import { KitchenStation } from '../models/menu';
 import { ah, badRequest, forbidden, notFound, paymentRequired } from '../lib/errors';
 import { can } from '../middleware/auth';
 import { checkIdParams, validateBody, validateQuery, zHex, zI18n, zPage } from '../middleware/validate';
-import { uploadMemory, storeTenantImage, deleteTenantImage } from '../middleware/upload';
+import { uploadMemory } from '../middleware/upload';
+import { attachableUrl, mediaUrl, retireUrl, uploadAsset } from '../services/media';
 import { audit } from '../services/audit';
 import { invalidateTenantCache } from '../services/tenantResolver';
 import { encryptSecret } from '../lib/crypto';
@@ -104,18 +105,44 @@ tenantAdminRouter.patch('/tenant/branding', can('branding:manage'), validateBody
 }));
 
 const IMAGE_SLOTS = ['logo', 'favicon', 'cover', 'hero'] as const;
-tenantAdminRouter.post('/tenant/branding/:slot', can('branding:manage'), uploadMemory.single('file'), ah(async (req, res) => {
-  const slot = req.params.slot as (typeof IMAGE_SLOTS)[number];
-  if (!IMAGE_SLOTS.includes(slot)) throw badRequest('Invalid image slot');
-  if (!req.file) throw badRequest('No file uploaded');
-  const url = await storeTenantImage(String(req.tenantId), 'branding', req.file);
+const slotOf = (s: string) => {
+  if (!(IMAGE_SLOTS as readonly string[]).includes(s)) throw badRequest('Invalid image slot');
+  return s as (typeof IMAGE_SLOTS)[number];
+};
+
+/**
+ * Sets a branding image. The new image is stored and verified FIRST; only then does the record change. The
+ * previous image is retired (kept, restorable), never deleted.
+ */
+async function setBrandingImage(req: any, slot: string, url: string | null) {
   const prev = await Tenant.findById(req.tenantId).select('branding').lean();
   const prevUrl = (prev?.branding as any)?.[`${slot}Url`];
-  await Tenant.updateOne({ _id: req.tenantId }, { $set: { [`branding.${slot}Url`]: url } });
-  if (prevUrl) await deleteTenantImage(String(req.tenantId), prevUrl);
+  await Tenant.updateOne({ _id: req.tenantId }, url ? { $set: { [`branding.${slot}Url`]: url } } : { $unset: { [`branding.${slot}Url`]: 1 } });
+  if (prevUrl && prevUrl !== url) await retireUrl(req.tenantId, prevUrl);
   invalidateTenantCache(req.tenant!.slug);
-  await audit(req, 'tenant.branding_image', 'Tenant', req.tenantId, { slot });
+  await audit(req, 'tenant.branding_image', 'Tenant', req.tenantId, { slot, removed: !url });
+}
+
+/** Upload a file straight into the default permanent storage (kept for existing clients). */
+tenantAdminRouter.post('/tenant/branding/:slot', can('branding:manage'), uploadMemory.single('file'), ah(async (req, res) => {
+  const slot = slotOf(req.params.slot);
+  if (!req.file) throw badRequest('No file uploaded');
+  const a = await uploadAsset({ tenantId: req.tenantId!, buffer: req.file.buffer, purpose: 'branding', label: slot, actor: { id: req.user!.id, name: req.user!.name } });
+  await setBrandingImage(req, slot, mediaUrl(a._id));
+  res.json({ url: mediaUrl(a._id) });
+}));
+
+/** Use an image from the library (uploaded to Cloudinary / cloud storage, or a linked https image). */
+tenantAdminRouter.put('/tenant/branding/:slot', can('branding:manage'), validateBody(z.object({ assetId: z.string().regex(/^[a-f0-9]{24}$/i) })), ah(async (req, res) => {
+  const slot = slotOf(req.params.slot);
+  const url = await attachableUrl(req.tenantId!, req.body.assetId);
+  await setBrandingImage(req, slot, url);
   res.json({ url });
+}));
+
+tenantAdminRouter.delete('/tenant/branding/:slot', can('branding:manage'), ah(async (req, res) => {
+  await setBrandingImage(req, slotOf(req.params.slot), null);
+  res.json({ ok: true });
 }));
 
 /* ------------------------------ Payment provider config ------------------------------ */

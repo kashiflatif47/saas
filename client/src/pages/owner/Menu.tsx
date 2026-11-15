@@ -10,6 +10,9 @@ import { ProductOptionsEditor } from './ProductOptionsEditor';
 import { blankProduct, productFormToBody, productToForm as toForm } from './productForm';
 import { displayPrice } from '../../offline/menuPricing';
 import { MissingAssets } from '../../components/MissingAssets';
+import { AddImage, ImageField } from '../../components/ImageField';
+import { ServingHoursEditor, ServingStatus, describeSchedule } from '../../components/ServingHours';
+import { hasSchedule } from '../../lib/schedule';
 
 type Lang = 'en' | 'ur' | 'ar';
 const LANGS: { k: Lang; label: string }[] = [{ k: 'en', label: 'English' }, { k: 'ur', label: 'اردو' }, { k: 'ar', label: 'العربية' }];
@@ -171,12 +174,13 @@ export default function MenuPage() {
 }
 
 function CatRow({ c, selected, onSelect, onEdit, onDelete, onMove }: any) {
+  const { tenant } = useAuth();
+  const tz = tenant?.settings?.timezone ?? 'UTC';
   return (
     <div className={cn('group flex items-center gap-1 rounded-lg', selected === c._id ? 'bg-brand/10' : 'hover:bg-stone-100')}>
       <button onClick={() => onSelect(c._id)} className="flex-1 truncate px-3 py-2 text-start text-sm">
         <span className={cn(!c.isActive && 'text-stone-400 line-through')}>{c.name.en}</span>
-        {c.schedule?.days?.length > 0 && <span className="ms-1 text-[10px] text-stone-400" title={`Served ${c.schedule.from || ''}–${c.schedule.to || ''}`}>⏱</span>}
-        {c.isActive && c.visibleNow === false && <span className="ms-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800" title="Outside its serving hours: guests cannot see these dishes right now">Hidden now</span>}
+        {c.isActive && c.openNow !== undefined && <ServingStatus className="ms-1.5" hasHours={!!c.hasSchedule} openNow={c.openNow} nextOpenAt={c.nextOpenAt} tz={tz} />}
       </button>
       <div className="flex transition lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100">
         <button className="p-1 text-stone-400 hover:text-stone-800" onClick={() => onMove(c._id, -1)} aria-label="Move up"><ArrowUp className="h-3.5 w-3.5" /></button>
@@ -206,6 +210,7 @@ function I18nInputs({ value, onChange, label, textarea }: { value: Record<string
 
 function CategoryModal({ value, onClose, categories, stations, onSaved }: any) {
   const fb = useFeedback();
+  const { tenant } = useAuth();
   const [v, setV] = useState<any>(value);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -245,18 +250,8 @@ function CategoryModal({ value, onClose, categories, stations, onSaved }: any) {
           </Field>
         </div>
         <div>
-          <span className="label">Schedule (optional)</span>
-          <div className="flex flex-wrap gap-1.5">
-            {DAYS.map((d, i) => {
-              const on = v.schedule?.days?.includes(i);
-              return <button key={d} type="button" onClick={() => setV({ ...v, schedule: { ...v.schedule, days: on ? v.schedule.days.filter((x: number) => x !== i) : [...(v.schedule?.days ?? []), i] } })} className={cn('rounded-lg border px-3 py-1.5 text-xs font-medium', on ? 'border-brand bg-brand text-brand-ink' : 'border-stone-200')}>{d}</button>;
-            })}
-          </div>
-          <div className="mt-2 flex gap-2">
-            <Field label="From"><Input type="time" value={v.schedule?.from ?? ''} onChange={(e) => setV({ ...v, schedule: { ...v.schedule, from: e.target.value } })} /></Field>
-            <Field label="To"><Input type="time" value={v.schedule?.to ?? ''} onChange={(e) => setV({ ...v, schedule: { ...v.schedule, to: e.target.value } })} /></Field>
-          </div>
-          <p className="mt-1 text-xs text-stone-500">Leave empty to show all day, every day. E.g. Breakfast: Mon–Sun 07:00–11:30.</p>
+          <span className="label">Serving hours (optional)</span>
+          <ServingHoursEditor value={v.schedule ?? { days: [] }} onChange={(schedule) => setV({ ...v, schedule })} tz={tenant?.settings?.timezone ?? 'UTC'} emptyHint="Leave empty to allow orders 24/7. E.g. Breakfast: 07:00–12:00." />
         </div>
         <Toggle checked={v.isActive} onChange={(isActive) => setV({ ...v, isActive })} label="Visible on menu" />
         <div>
@@ -264,30 +259,10 @@ function CategoryModal({ value, onClose, categories, stations, onSaved }: any) {
           {!v._id ? (
             <p className="text-xs text-stone-500">Save the category first, then add an image. It appears next to the category title on your menu.</p>
           ) : (
-            <div className="flex items-center gap-4">
-              <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-xl border border-stone-200 bg-stone-50 text-stone-300">
-                {v.imageUrl ? <img src={assetUrl(v.imageUrl)} alt="" className="h-full w-full object-cover" /> : <ImagePlus className="h-6 w-6" />}
-              </div>
-              <label className="focus-within:ring-brand/50 inline-flex cursor-pointer items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-700 shadow-[0_1px_1px_rgb(28_25_23/0.04)] transition hover:border-stone-300 focus-within:ring-2">
-                <ImagePlus className="h-4 w-4" /> {v.imageUrl ? 'Replace image' : 'Upload image'}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  className="sr-only"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = '';
-                    if (!file) return;
-                    try {
-                      const r = await api.upload(`/api/staff/menu/categories/${v._id}/image`, file);
-                      setV({ ...v, imageUrl: r.url });
-                      fb.ok('Category image updated');
-                    } catch (err) {
-                      fb.fail(err);
-                    }
-                  }}
-                />
-              </label>
+            <div className="max-w-xs">
+              <ImageField label="Image" url={v.imageUrl} purpose="category" compact
+                onAttach={async (assetId) => { const r = await api.put(`/api/staff/menu/categories/${v._id}/image`, { assetId }); setV({ ...v, imageUrl: r.url }); fb.ok('Category image updated'); }}
+                onRemove={async () => { await api.del(`/api/staff/menu/categories/${v._id}/image`); setV({ ...v, imageUrl: undefined }); }} />
             </div>
           )}
         </div>
@@ -303,6 +278,7 @@ function ProductModal({ value, onClose, categories, onChanged }: any) {
   const [v, setV] = useState<any>(value);
   const [busy, setBusy] = useState(false);
   const [inventory, setInventory] = useState<any[]>([]);
+  const [adding, setAdding] = useState(false);
   useEffect(() => {
     setV(value);
   }, [value]);
@@ -339,6 +315,7 @@ function ProductModal({ value, onClose, categories, onChanged }: any) {
     }
   };
   const removeImg = async (url: string) => {
+    if (!window.confirm('Remove this photo from the dish? The image stays in storage and can be added back.')) return;
     try {
       const r = await api.del(`/api/staff/menu/products/${v._id}/images`, { url });
       setV({ ...v, images: r.images });
@@ -374,6 +351,21 @@ function ProductModal({ value, onClose, categories, onChanged }: any) {
           <Toggle checked={v.trackStock} onChange={(trackStock) => setV({ ...v, trackStock })} label="Track portions in stock" />
           {v.trackStock && <Input type="number" min="0" className="w-28" value={v.stockQty} onChange={(e) => setV({ ...v, stockQty: e.target.value })} aria-label="Stock quantity" />}
         </div>
+        <section className="rounded-xl border border-stone-200 p-4">
+          <p className="text-sm font-semibold">Serving hours</p>
+          {(() => {
+            const cat = categories.find((c: any) => c._id === v.categoryId);
+            const parent = cat?.parentId ? categories.find((c: any) => c._id === cat.parentId) : null;
+            const inherited = hasSchedule(cat?.schedule) ? cat.schedule : hasSchedule(parent?.schedule) ? parent.schedule : null;
+            return (
+              <div className="mt-2 space-y-3">
+                <label className="flex items-center gap-2 text-sm"><input type="radio" checked={!v.scheduleOverride} onChange={() => setV({ ...v, scheduleOverride: false })} /> Same as its category: <span className="font-medium">{inherited ? describeSchedule(inherited) : 'orderable 24/7'}</span></label>
+                <label className="flex items-center gap-2 text-sm"><input type="radio" checked={!!v.scheduleOverride} onChange={() => setV({ ...v, scheduleOverride: true })} /> Its own serving hours</label>
+                {v.scheduleOverride && <ServingHoursEditor value={v.schedule} onChange={(schedule) => setV({ ...v, schedule })} tz={tenant?.settings?.timezone ?? 'UTC'} emptyHint="Leave empty to make this dish orderable 24/7 even if its category has hours." />}
+              </div>
+            );
+          })()}
+        </section>
 
         <ProductOptionsEditor v={v} setV={setV} dec={dec} money={(n) => formatMoney(n, tenant?.settings?.currency, dec)} inventory={hasFeature('inventory') ? inventory : null} />
         {hasFeature('inventory') && (
@@ -398,13 +390,22 @@ function ProductModal({ value, onClose, categories, onChanged }: any) {
                   <button onClick={() => removeImg(u)} className="absolute end-1 top-1 rounded-full bg-white/90 p-1 shadow transition focus:opacity-100 lg:opacity-0 lg:group-hover:opacity-100" aria-label="Remove photo"><X className="h-3 w-3" /></button>
                 </div>
               ))}
-              {v.images.length < 8 && (
-                <label className="flex h-24 w-24 cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-stone-300 text-xs text-stone-500 hover:border-brand hover:text-brand">
-                  <ImagePlus className="h-5 w-5" /> Upload
-                  <input type="file" accept="image/png,image/jpeg,image/webp" multiple className="hidden" onChange={(e) => upload(e.target.files)} />
-                </label>
+              {v.images.length < 8 && !adding && (
+                <button type="button" onClick={() => setAdding(true)} className="flex h-24 w-24 flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-stone-300 text-xs text-stone-500 hover:border-brand hover:text-brand">
+                  <ImagePlus className="h-5 w-5" /> Add photo
+                </button>
               )}
             </div>
+          )}
+          {v._id && adding && (
+            <AddImage purpose="product" label={v.name?.en || 'Dish photo'} onCancel={() => setAdding(false)}
+              onDone={async (assetId) => {
+                const r = await api.post(`/api/staff/menu/products/${v._id}/images/attach`, { assetId });
+                setV({ ...v, images: r.images });
+                setAdding(false);
+                onChanged();
+                fb.ok('Photo added');
+              }} />
           )}
         </section>
       </div>

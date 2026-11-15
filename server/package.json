@@ -23,7 +23,9 @@
     "e2e": "tsx tests/e2e/journey.ts",
     "test:local-routing": "tsx tests/e2e/local-routing.ts",
     "audit:option-pricing": "tsx src/scripts/auditOptionPricing.ts",
-    "audit:option-pricing:prod": "node dist/scripts/auditOptionPricing.js"
+    "audit:option-pricing:prod": "node dist/scripts/auditOptionPricing.js",
+    "assets:migrate": "tsx src/scripts/migrateAssets.ts",
+    "assets:migrate:prod": "node dist/scripts/migrateAssets.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

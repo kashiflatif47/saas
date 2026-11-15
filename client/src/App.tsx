@@ -2,7 +2,7 @@ import { lazy, Suspense, type ReactNode } from 'react';
 import { OfflineProvider } from './offline/OfflineProvider';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Building2, CreditCard, ScrollText, ClipboardList, UtensilsCrossed, QrCode, Palette, Settings, Users, Boxes, CalendarClock,
+  LayoutDashboard, Building2, CreditCard, ScrollText, HardDrive, ClipboardList, UtensilsCrossed, QrCode, Palette, Settings, Users, Boxes, CalendarClock,
   Contact, MessageSquareHeart, TicketPercent, BarChart3, ChefHat, Wallet, ShieldCheck, ConciergeBell, MonitorSmartphone, Banknote, Sparkles, Megaphone, Bike,
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './store/auth';
@@ -18,6 +18,7 @@ const AdminTenants = lazy(() => import('./pages/admin/Tenants'));
 const AdminTenantDetail = lazy(() => import('./pages/admin/TenantDetail'));
 const AdminPlans = lazy(() => import('./pages/admin/Plans'));
 const AdminAudit = lazy(() => import('./pages/admin/Audit'));
+const AdminStorage = lazy(() => import('./pages/admin/Storage'));
 
 const OwnerDashboard = lazy(() => import('./pages/owner/Dashboard'));
 const Orders = lazy(() => import('./pages/owner/Orders'));
@@ -47,6 +48,7 @@ const PLATFORM_NAV: { group?: string; items: NavItem[] }[] = [
       { to: '/admin', label: 'Overview', icon: LayoutDashboard, end: true },
       { to: '/admin/tenants', label: 'Restaurants', icon: Building2 },
       { to: '/admin/plans', label: 'Plans', icon: CreditCard },
+      { to: '/admin/storage', label: 'Storage', icon: HardDrive },
       { to: '/admin/audit', label: 'Audit log', icon: ScrollText },
     ],
   },
@@ -191,6 +193,7 @@ export default function App() {
                 <Route path="tenants/:id" element={<AdminTenantDetail />} />
                 <Route path="plans" element={<AdminPlans />} />
                 <Route path="audit" element={<AdminAudit />} />
+                <Route path="storage" element={<AdminStorage />} />
               </Route>
               <Route path="*" element={<Navigate to="/admin" replace />} />
             </Routes>

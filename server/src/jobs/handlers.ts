@@ -8,6 +8,8 @@ import { recalculateSegments } from '../services/segments';
 import { evaluateOutcomes, refreshRecommendations } from '../services/recommendations';
 import { dispatchMessages, evaluateJourneys, scheduleDispatch, startCampaign } from '../services/marketing';
 import { checkDelays, handleAcceptTimeout } from '../services/delivery';
+import { Asset } from '../models/storage';
+import { verifyAsset } from '../services/media';
 
 /** Loads the job's tenant; jobs of deleted or suspended restaurants do nothing. */
 async function tenantOf(job: { tenantId?: any }) {
@@ -34,6 +36,18 @@ export function registerAllJobs() {
     return { ...(await refreshRecommendations(t)), ...(await evaluateOutcomes(t)) };
   });
   registerJob('delivery.acceptTimeout', async (j) => { const t = await tenantOf(j); return t ? handleAcceptTimeout(t, j.payload) : { skipped: 'tenant inactive' }; });
+  // Daily integrity check of stored images (bytes still where each asset says, checksums match). Read-only.
+  registerJob('assets.verify', async (j) => {
+    const t = await tenantOf(j);
+    if (!t) return { skipped: 'tenant inactive' };
+    const ids = await Asset.find({ tenantId: t._id, status: 'active', provider: { $ne: 'external' } }).select('_id').limit(1000).lean();
+    const counts: Record<string, number> = {};
+    for (const a of ids) {
+      const s = await verifyAsset(t._id, String(a._id));
+      counts[s] = (counts[s] ?? 0) + 1;
+    }
+    return counts;
+  });
   registerJob('delivery.delays', async (j) => { const t = await tenantOf(j); return t ? checkDelays(t) : { skipped: 'tenant inactive' }; });
   // Retention: finished jobs after 30 days, message logs after 180 days, AI usage after 365 days.
   registerJob('cleanup', async () =>
@@ -70,6 +84,7 @@ export async function scheduleRecurring(now = new Date()) {
       await enqueueJob({ type: 'segments.recalculate', tenantId: t._id, key: `segments:${id}:${l.date}` });
       await enqueueJob({ type: 'forecast.refresh', tenantId: t._id, key: `forecast:${id}:${l.date}` });
       await enqueueJob({ type: 'recommendations.refresh', tenantId: t._id, key: `recs:${id}:${l.date}`, runAt: new Date(now.getTime() + 5 * 60_000) });
+      await enqueueJob({ type: 'assets.verify', tenantId: t._id, key: `assets:${id}:${l.date}`, maxAttempts: 1 });
     }
     await enqueueJob({ type: 'journeys.evaluate', tenantId: t._id, key: `journeys:${id}:${l.date}T${l.hour}` });
     await enqueueJob({ type: 'delivery.delays', tenantId: t._id, key: `delays:${id}:${Math.floor(now.getTime() / 120_000)}`, maxAttempts: 1 });

@@ -51,7 +51,7 @@ export default defineConfig(({ mode }) => {
         // Safe offline: cache the app shell and static assets only. API calls are NEVER cached,
         // so orders, payments and stock are always live (no stale or replayed transactions).
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//, /^\/socket\.io\//, /^\/uploads\//],
+        navigateFallbackDenylist: [/^\/api\//, /^\/socket\.io\//, /^\/uploads\//, /^\/media\//],
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         runtimeCaching: [
           { urlPattern: ({ url }) => url.pathname.startsWith('/uploads/'), handler: 'StaleWhileRevalidate', options: { cacheName: 'tenant-images', expiration: { maxEntries: 300, maxAgeSeconds: 7 * 86400 } } },

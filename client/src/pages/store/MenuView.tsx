@@ -17,7 +17,7 @@ type Money = (n: number) => string;
 export default function MenuView({ store }: { store: StoreInfo }) {
   const { t, pick, lang } = useI18n();
   const cart = useCart();
-  const [menu, setMenu] = useState<{ categories: any[]; products: any[]; closedNow?: { _id: string; name: any; schedule?: { days?: number[]; from?: string; to?: string } }[] } | null>(null);
+  const [menu, setMenu] = useState<{ categories: any[]; products: any[] } | null>(null);
   const [reviews, setReviews] = useState<any[]>([]);
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
@@ -30,6 +30,17 @@ export default function MenuView({ store }: { store: StoreInfo }) {
 
   useEffect(() => {
     api.get('/api/public/menu').then(setMenu).catch((e) => setError(e.message));
+    // Serving hours change while the page is open: refresh availability every minute and when the guest returns.
+    const refresh = () => api.get('/api/public/menu').then(setMenu).catch(() => undefined);
+    const timer = setInterval(refresh, 60_000);
+    const onVisible = () => document.visibilityState === 'visible' && refresh();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
+  useEffect(() => {
     // Published guest reviews (owners choose which to publish in Dashboard → Feedback).
     api.get('/api/public/feedback').then((r) => setReviews(r.items ?? [])).catch(() => setReviews([]));
   }, []);
@@ -143,14 +154,14 @@ export default function MenuView({ store }: { store: StoreInfo }) {
         {!q && offers.length > 0 && (
           <Shelf title={t('offers')} icon={<Tag className="h-4 w-4" />}>
             {offers.map((p) => (
-              <ShelfCard key={p._id} p={p} money={money} onOpen={() => setSheet(p)} badge={`−${Math.round((1 - shownPrice(p).amount / shownPrice(p).original) * 100)}%`} />
+              <ShelfCard key={p._id} p={p} money={money} tz={store.settings.timezone ?? 'UTC'} onOpen={() => setSheet(p)} badge={`−${Math.round((1 - shownPrice(p).amount / shownPrice(p).original) * 100)}%`} />
             ))}
           </Shelf>
         )}
         {!q && featured.length > 0 && (
           <Shelf title={t('featured')} icon={<Sparkles className="h-4 w-4" />}>
             {featured.map((p) => (
-              <ShelfCard key={p._id} p={p} money={money} onOpen={() => setSheet(p)} />
+              <ShelfCard key={p._id} p={p} money={money} tz={store.settings.timezone ?? 'UTC'} onOpen={() => setSheet(p)} />
             ))}
           </Shelf>
         )}
@@ -198,20 +209,12 @@ export default function MenuView({ store }: { store: StoreInfo }) {
           )}
         </div>
 
-        {/* "Being prepared" only when the restaurant has no dishes at all; dishes outside their serving hours show the hours. */}
-        {menu.products.length === 0 && !menu.closedNow?.length && <p className="py-24 text-center opacity-70" role="status">{t('menuEmpty')}</p>}
-        {(menu.closedNow?.length ?? 0) > 0 && (
-          <div className={cn('mx-auto max-w-xl text-center', menu.products.length === 0 ? 'py-20' : 'py-6')} role="status">
-            {menu.products.length === 0 && <p className="font-display text-xl font-semibold">{t('notServingNow')}</p>}
-            <ul className="mt-2 space-y-1 text-sm opacity-75">
-              {menu.closedNow!.map((c) => <li key={c._id}><span className="font-medium">{pick(c.name)}</span> · {servingHours(c.schedule, lang, t('everyDay'))}</li>)}
-            </ul>
-          </div>
-        )}
+        {/* The whole menu is always shown; "being prepared" only when the restaurant has no published dishes. */}
+        {menu.products.length === 0 && <p className="py-24 text-center opacity-70" role="status">{t('menuEmpty')}</p>}
         {menu.products.length > 0 && q.trim() !== '' && byCat.size === 0 && <p className="py-20 text-center opacity-70" role="status">{t('noResults')}</p>}
 
         {shownCats.map((c) => (
-          <CategorySection key={c._id} id={`cat-${c._id}`} category={c} items={byCat.get(c._id) ?? []} money={money} onOpen={setSheet} />
+          <CategorySection key={c._id} id={`cat-${c._id}`} category={c} items={byCat.get(c._id) ?? []} money={money} onOpen={setSheet} tz={store.settings.timezone ?? 'UTC'} />
         ))}
 
         {/* ---------- Reviews ---------- */}
@@ -237,8 +240,8 @@ export default function MenuView({ store }: { store: StoreInfo }) {
         </div>
       )}
 
-      {sheet && <ProductSheet p={sheet} money={money} onClose={() => setSheet(null)} onAdded={onAdded} />}
-      {cartOpen && <CartSheet store={store} money={money} onClose={() => setCartOpen(false)} />}
+      {sheet && <ProductSheet p={menu?.products.find((x) => x._id === sheet._id) ?? sheet} money={money} tz={store.settings.timezone ?? 'UTC'} onClose={() => setSheet(null)} onAdded={onAdded} />}
+      {cartOpen && <CartSheet store={store} money={money} products={menu?.products ?? []} onClose={() => setCartOpen(false)} />}
     </>
   );
 }
@@ -258,8 +261,8 @@ function Shelf({ title, icon, children }: { title: string; icon: ReactNode; chil
   );
 }
 
-function ShelfCard({ p, money, onOpen, badge }: { p: any; money: Money; onOpen: () => void; badge?: string }) {
-  const { pick } = useI18n();
+function ShelfCard({ p, money, onOpen, badge, tz }: { p: any; money: Money; onOpen: () => void; badge?: string; tz: string }) {
+  const { pick, t, lang } = useI18n();
   return (
     <button onClick={onOpen} className="group w-[248px] shrink-0 snap-start overflow-hidden rounded-brand-lg bg-store-surface text-start shadow-card ring-1 ring-store-text/[0.06] transition duration-300 hover:-translate-y-1 hover:shadow-lift sm:w-[280px]">
       <div className="relative aspect-[4/3] overflow-hidden bg-accent/15">
@@ -275,16 +278,17 @@ function ShelfCard({ p, money, onOpen, badge }: { p: any; money: Money; onOpen: 
       <div className="p-4">
         <p className="line-clamp-1 font-display text-lg font-semibold leading-snug">{pick(p.name)}</p>
         {pick(p.description) && <p className="mt-1 line-clamp-1 text-sm opacity-60">{pick(p.description)}</p>}
-        <div className="mt-2.5">
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
           <Price p={p} money={money} />
+          {!p.soldOut && p.availability?.isAvailableNow === false && <UnavailableBadge p={p} tz={tz} lang={lang} t={t} />}
         </div>
       </div>
     </button>
   );
 }
 
-function CategorySection({ id, category, items, money, onOpen }: { id: string; category: any; items: any[]; money: Money; onOpen: (p: any) => void }) {
-  const { pick, t } = useI18n();
+function CategorySection({ id, category, items, money, onOpen, tz }: { id: string; category: any; items: any[]; money: Money; onOpen: (p: any) => void; tz: string }) {
+  const { pick, t, lang } = useI18n();
   const ref = useReveal<HTMLElement>(0.05);
   return (
     <section ref={ref} id={id} className="reveal scroll-mt-36 pt-12">
@@ -293,6 +297,14 @@ function CategorySection({ id, category, items, money, onOpen }: { id: string; c
         <div className="min-w-0">
           <h3 className="font-display text-2xl font-semibold tracking-tight sm:text-[28px]">{pick(category.name)}</h3>
           {pick(category.description) && <p className="mt-1 text-sm opacity-65">{pick(category.description)}</p>}
+          {category.availability?.schedule && (
+            <p className="mt-1 text-xs font-medium">
+              <span className="opacity-60">{t('servingHours')}: {servingHours(category.availability.schedule, lang, t('everyDay'))}</span>
+              <span className={cn('ms-2 rounded-full px-2 py-0.5', category.availability.openNow ? 'bg-emerald-500/10 text-emerald-700' : 'bg-amber-500/15 text-amber-800')}>
+                {category.availability.openNow ? t('available') : opensLabel(category.availability.nextOpenAt, tz, lang, t) || t('unavailableNow')}
+              </span>
+            </p>
+          )}
         </div>
         <span className="ms-auto shrink-0 pb-1 text-xs font-medium opacity-50">
           {items.length} {t(items.length === 1 ? 'dish' : 'dishes')}
@@ -300,15 +312,16 @@ function CategorySection({ id, category, items, money, onOpen }: { id: string; c
       </div>
       <div className="mt-6 grid gap-4 md:grid-cols-2 md:gap-5">
         {items.map((p) => (
-          <DishCard key={p._id} p={p} money={money} onOpen={() => onOpen(p)} />
+          <DishCard key={p._id} p={p} money={money} onOpen={() => onOpen(p)} tz={tz} />
         ))}
       </div>
     </section>
   );
 }
 
-function DishCard({ p, money, onOpen }: { p: any; money: Money; onOpen: () => void }) {
-  const { t, pick } = useI18n();
+function DishCard({ p, money, onOpen, tz }: { p: any; money: Money; onOpen: () => void; tz: string }) {
+  const { t, pick, lang } = useI18n();
+  const closed = !p.soldOut && p.availability?.isAvailableNow === false;
   return (
     <button
       disabled={p.soldOut}
@@ -337,6 +350,7 @@ function DishCard({ p, money, onOpen }: { p: any; money: Money; onOpen: () => vo
             </span>
           )}
           {p.soldOut && <span className="rounded-full bg-store-text/10 px-2 py-0.5 text-[11px] font-semibold">{t('soldOut')}</span>}
+          {closed && <UnavailableBadge p={p} tz={tz} lang={lang} t={t} />}
         </div>
       </div>
       <div className="relative h-[108px] w-[108px] shrink-0 overflow-hidden rounded-brand bg-accent/15 sm:h-32 sm:w-32">
@@ -347,13 +361,33 @@ function DishCard({ p, money, onOpen }: { p: any; money: Money; onOpen: () => vo
             <UtensilsCrossed className="h-7 w-7" />
           </div>
         )}
-        {!p.soldOut && (
+        {!p.soldOut && !closed && (
           <span className="absolute bottom-2 end-2 flex h-8 w-8 items-center justify-center rounded-full bg-brand text-brand-ink shadow-lift transition duration-200 group-hover:scale-110">
             <Plus className="h-4 w-4" />
           </span>
         )}
       </div>
     </button>
+  );
+}
+
+/** "Opens at 7:00 AM" today, otherwise "Opens Sat 7:00 AM" — in the restaurant's time zone. */
+function opensLabel(nextIso: string | null | undefined, tz: string, lang: string, t: (k: any) => string) {
+  if (!nextIso) return '';
+  const locale = lang === 'en' ? 'en' : lang === 'ur' ? 'ur-PK' : 'ar';
+  const next = new Date(nextIso);
+  const day = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(d);
+  const time = new Intl.DateTimeFormat(locale, { timeZone: tz, hour: 'numeric', minute: '2-digit' }).format(next);
+  if (day(next) === day(new Date())) return t('opensAt').replace('{time}', time);
+  return t('opensOn').replace('{day}', new Intl.DateTimeFormat(locale, { timeZone: tz, weekday: 'short' }).format(next)).replace('{time}', time);
+}
+
+function UnavailableBadge({ p, tz, lang, t }: { p: any; tz: string; lang: string; t: (k: any) => string }) {
+  const opens = opensLabel(p.availability?.nextAvailableAt, tz, lang, t);
+  return (
+    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+      {t('unavailableNow')}{opens ? ` · ${opens}` : ''}
+    </span>
   );
 }
 
@@ -447,8 +481,8 @@ function Sheet({ children, onClose, label }: { children: ReactNode; onClose: () 
   );
 }
 
-function ProductSheet({ p, money, onClose, onAdded }: { p: any; money: Money; onClose: () => void; onAdded: () => void }) {
-  const { t, pick } = useI18n();
+function ProductSheet({ p, money, onClose, onAdded, tz }: { p: any; money: Money; onClose: () => void; onAdded: () => void; tz: string }) {
+  const { t, pick, lang } = useI18n();
   const cart = useCart();
   const gallery = useRef<HTMLDivElement>(null);
   const [img, setImg] = useState(0);
@@ -464,7 +498,10 @@ function ProductSheet({ p, money, onClose, onAdded }: { p: any; money: Money; on
   // Unit price from the same rules the server charges with (a selected option REPLACES the dish price).
   const unit = resolved?.unitPrice ?? null;
 
+  // Outside serving hours (or switched off / sold out): details stay visible, ordering is disabled.
+  const orderable = !p.soldOut && p.availability?.isAvailableNow !== false;
   const add = () => {
+    if (!orderable) return;
     if (!resolved) return setTried(true); // show what is still missing
     cart.add({
       productId: p._id, name: p.name, image: p.images[0], selection,
@@ -542,9 +579,9 @@ function ProductSheet({ p, money, onClose, onAdded }: { p: any; money: Money; on
             <Plus className="h-4 w-4" />
           </button>
         </div>
-        <button onClick={add} aria-disabled={!resolved} className={cn('store-btn h-12 flex-1 justify-between px-5', !resolved && 'opacity-60')}>
-          <span>{!resolved ? t('chooseOption') : t('addToCart')}</span>
-          {unit != null && <span className="tabular">{money(unit * qty)}</span>}
+        <button onClick={add} disabled={!orderable} aria-disabled={!resolved || !orderable} className={cn('store-btn h-12 flex-1 justify-between px-5', (!resolved || !orderable) && 'cursor-not-allowed opacity-60')}>
+          <span>{!orderable ? (p.soldOut ? t('soldOut') : [t('unavailableNow'), opensLabel(p.availability?.nextAvailableAt, tz, lang, t)].filter(Boolean).join(' · ')) : !resolved ? t('chooseOption') : t('addToCart')}</span>
+          {unit != null && orderable && <span className="tabular">{money(unit * qty)}</span>}
         </button>
       </div>
     </Sheet>
@@ -558,9 +595,16 @@ function newCheckoutKey(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-function CartSheet({ store, money, onClose }: { store: StoreInfo; money: Money; onClose: () => void }) {
-  const { t, pick } = useI18n();
+function CartSheet({ store, money, onClose, products }: { store: StoreInfo; money: Money; onClose: () => void; products: any[] }) {
+  const { t, pick, lang } = useI18n();
   const cart = useCart();
+  const tz = store.settings.timezone ?? 'UTC';
+  const byId = new Map(products.map((p) => [p._id, p]));
+  const notOrderable = (productId: string) => {
+    const p = byId.get(productId);
+    return !!p && (p.soldOut || p.availability?.isAvailableNow === false);
+  };
+  const blocked = cart.lines.some((l) => notOrderable(l.productId));
   const nav = useNavigate();
   const types: string[] = store.settings.orderTypes ?? ['dine_in'];
   const [type, setType] = useState<string>(cart.tableToken && types.includes('dine_in') ? 'dine_in' : types.find((x) => x !== 'dine_in') ?? types[0]);
@@ -670,6 +714,7 @@ function CartSheet({ store, money, onClose }: { store: StoreInfo; money: Money; 
                   <div className="min-w-0 flex-1">
                     <p className="font-medium leading-snug">{pick(l.name)}</p>
                     {l.summary.length > 0 && <p className="text-xs opacity-60">{l.summary.join(' · ')}</p>}
+                    {notOrderable(l.productId) && <div className="mt-1"><UnavailableBadge p={byId.get(l.productId)} tz={tz} lang={lang} t={t} /></div>}
                     {l.notes && <p className="text-xs italic opacity-60">“{l.notes}”</p>}
                     <p className="tabular mt-1 text-sm font-semibold">{money(l.unitPrice * l.quantity)}</p>
                   </div>
@@ -781,7 +826,8 @@ function CartSheet({ store, money, onClose }: { store: StoreInfo; money: Money; 
       {cart.lines.length > 0 && (
         <div className="border-t border-store-text/[0.06] bg-store-bg/95 p-4 backdrop-blur">
           {needsAddress && <p className="mb-2 text-center text-xs opacity-70">{t('needAddress')}</p>}
-          <button onClick={place} disabled={busy || needsTable || needsAddress || !s.guestOrdering} className="store-btn w-full">
+          {blocked && <p className="mb-2 rounded-brand-sm bg-amber-500/10 px-3 py-2 text-sm text-amber-900" role="alert">{t('cartHasUnavailable')}</p>}
+          <button onClick={place} disabled={busy || needsTable || needsAddress || !s.guestOrdering || blocked} className="store-btn w-full">
             {busy ? '…' : `${t('checkout')} · ${money(total)}`}
           </button>
         </div>

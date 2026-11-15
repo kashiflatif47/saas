@@ -22,6 +22,13 @@ test('menu option pricing in the browser is a verbatim copy of the server module
   assert.equal(body.replace(/\r\n/g, '\n'), s.replace(/\r\n/g, '\n'), 'client/src/offline/menuPricing.ts must equal server/src/lib/menuPricing.ts');
 });
 
+test('serving-hours rules in the browser are a verbatim copy of the server module', () => {
+  const s = fs.readFileSync(path.join(__dirname, '../../src/lib/schedule.ts'), 'utf8');
+  const c = fs.readFileSync(path.join(__dirname, '../../../client/src/lib/schedule.ts'), 'utf8');
+  const body = c.slice(c.indexOf('*/') + 3);
+  assert.equal(body.replace(/\r\n/g, '\n'), s.replace(/\r\n/g, '\n'), 'client/src/lib/schedule.ts must equal server/src/lib/schedule.ts');
+});
+
 test('offline and server pricing give identical results on randomised orders', () => {
   let seed = 42;
   const rnd = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2 ** 31), seed % n);

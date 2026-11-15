@@ -148,7 +148,12 @@ test('upload paths are namespaced per tenant', async () => {
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a5d70000000049454e44ae426082', 'hex');
   const up = await request(app).post('/api/staff/tenant/branding/logo').set(auth(A.token)).attach('file', png, 'logo.png');
   assert.equal(up.status, 200, JSON.stringify(up.body));
-  assert.ok(up.body.url.startsWith(`/uploads/${A.tenantId}/`));
+  // Stable address; the stored object is namespaced under this restaurant and the record belongs to it only.
+  assert.match(up.body.url, /^\/media\/[a-f0-9]{24}$/);
+  const media = await request(app).get(up.body.url);
+  assert.equal(media.status, 302);
+  assert.ok(media.headers.location.startsWith(`/uploads/${A.tenantId}/branding/`), media.headers.location);
+  assert.equal((await request(app).get(`/api/staff/assets/${up.body.url.split('/').pop()}`).set(auth(B.token))).status, 404, 'other tenant cannot read it');
   const bad = await request(app).post('/api/staff/tenant/branding/logo').set(auth(A.token)).attach('file', Buffer.from('<svg/>'), 'x.png');
   assert.equal(bad.status, 400);
 });

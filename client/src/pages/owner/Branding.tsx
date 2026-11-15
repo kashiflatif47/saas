@@ -7,6 +7,7 @@ import { Button, Card, ErrorState, Field, Input, Loading, PageHeader, Select, Ta
 import { applyTheme, contrastRatio, inkFor } from '../../lib/util';
 import { Palette as HeaderIcon } from 'lucide-react';
 import { MissingAssets } from '../../components/MissingAssets';
+import { ImageField } from '../../components/ImageField';
 
 const DEFAULT_THEME = { primary: '#B4532A', secondary: '#1F2937', accent: '#E9B44C', background: '#FFFBF5', surface: '#FFFFFF', text: '#1C1917', fontHeading: 'Fraunces', fontBody: 'Inter', radius: 14 };
 const PRESETS: { name: string; theme: Partial<typeof DEFAULT_THEME> }[] = [
@@ -84,16 +85,12 @@ export default function Branding() {
       <div className="grid gap-6 xl:grid-cols-[1fr_440px] [&>*]:min-w-0">
         <div className="space-y-6">
           <Card title="Images">
-            <div className="grid gap-4 sm:grid-cols-4">
+            {/* Upload to Cloudinary or cloud storage, or link an existing https image. Replacing keeps the old image. */}
+            <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
               {[['logo', 'Logo', b.logoUrl], ['favicon', 'Favicon', b.faviconUrl], ['hero', 'Hero image', b.heroUrl], ['cover', 'Cover / about', b.coverUrl]].map(([slot, label, url]) => (
-                <label key={slot} className="group cursor-pointer">
-                  <span className="label">{label}</span>
-                  <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-stone-300 bg-stone-50 transition group-hover:border-brand">
-                    {url ? <img src={assetUrl(url)} alt="" className="h-full w-full object-cover" /> : <ImagePlus className="h-6 w-6 text-stone-400" />}
-                    {busy === slot && <div className="absolute inset-0 flex items-center justify-center bg-white/70 text-xs">Uploading…</div>}
-                  </div>
-                  <input type="file" accept="image/png,image/jpeg,image/webp,image/x-icon" className="hidden" onChange={(e) => upload(slot!, e.target.files?.[0])} />
-                </label>
+                <ImageField key={slot} label={label!} url={url} purpose="branding" compact
+                  onAttach={async (assetId) => { await api.put(`/api/staff/tenant/branding/${slot}`, { assetId }); await refreshMe(); reload(); fb.ok(`${label} updated`); }}
+                  onRemove={async () => { await api.del(`/api/staff/tenant/branding/${slot}`); await refreshMe(); reload(); }} />
               ))}
             </div>
             <p className="mt-3 text-xs text-stone-500">PNG, JPG or WEBP up to 5 MB. Square logo (512×512) and wide hero (1600×900) look best.</p>

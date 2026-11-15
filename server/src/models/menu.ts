@@ -127,6 +127,10 @@ const productSchema = new Schema(
     stockQty: { type: Number, default: 0 },
     recipe: { type: [recipeSchema], default: [] },
     prepMinutes: { type: Number, default: 10 },
+    // Serving hours (ordering only — never visibility). Off = the category's hours apply (lib/schedule.ts);
+    // on with an empty schedule = this dish can be ordered 24/7 even when its category has hours.
+    scheduleOverride: { type: Boolean, default: false },
+    schedule: { days: { type: [Number], default: undefined }, from: String, to: String },
     sortOrder: { type: Number, default: 0 },
   },
   { timestamps: true },

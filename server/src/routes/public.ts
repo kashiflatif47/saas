@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { Tenant } from '../models/platform';
 import { Category, Product, effectivePrice } from '../models/menu';
 import { activeVariants, displayPrice, variantIsRequired } from '../lib/menuPricing';
+import { availabilityAt, effectiveSchedule, isOpenAt, scheduleClock, type ServingSchedule } from '../lib/schedule';
 import { Coupon, Feedback, Order, Reservation, Table } from '../models/operations';
 import { ah, badRequest, notFound } from '../lib/errors';
 import { checkIdParams, validateBody } from '../middleware/validate';
@@ -28,17 +29,9 @@ function customerOrder(o: any) {
 const orderLimiter = rateLimit({ windowMs: 60_000, limit: 15, standardHeaders: true, legacyHeaders: false });
 const formLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeaders: true, legacyHeaders: false });
 
-/** Is a category visible right now given its schedule (in the tenant's timezone)? */
-export function categoryVisibleNow(schedule: { days?: number[]; from?: string; to?: string } | undefined, tz: string, now = new Date()): boolean {
-  if (!schedule || ((!schedule.days || schedule.days.length === 0) && !schedule.from && !schedule.to)) return true;
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(now);
-  const wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(parts.find((p) => p.type === 'weekday')!.value);
-  const hm = `${parts.find((p) => p.type === 'hour')!.value.replace('24', '00')}:${parts.find((p) => p.type === 'minute')!.value}`;
-  if (schedule.days?.length && !schedule.days.includes(wd)) return false;
-  if (schedule.from && schedule.to) {
-    return schedule.from <= schedule.to ? hm >= schedule.from && hm < schedule.to : hm >= schedule.from || hm < schedule.to;
-  }
-  return true;
+/** Is a category open for ordering right now (serving hours, restaurant time zone)? See lib/schedule.ts. */
+export function categoryVisibleNow(schedule: ServingSchedule | undefined, tz: string, now = new Date()): boolean {
+  return isOpenAt(schedule, tz, now);
 }
 
 publicRouter.get('/storefront', ah(async (req, res) => {
@@ -56,6 +49,7 @@ publicRouter.get('/storefront', ah(async (req, res) => {
       taxRatePercent: s.taxRatePercent, taxInclusive: s.taxInclusive, serviceChargePercent: s.serviceChargePercent,
       guestOrdering: s.guestOrdering, orderTypes: s.orderTypes, openingHours: s.openingHours, requireTableForDineIn: s.requireTableForDineIn,
       deliveryFee: s.deliveryFee ?? 0, taxLabel: s.taxLabel || undefined,
+      timezone: req.tenant!.settings?.timezone ?? 'UTC', // to show "opens at 7:00 AM" in restaurant time
     },
     // Active delivery zones (name, fee, minimum, ETA). Boundaries stay server-side; the server matches the address.
     deliveryZones: (await DeliveryZone.find({ tenantId: req.tenantId, isActive: true }).select('name fee minOrder etaMinutes hours').sort({ name: 1 }).lean()).map((z) => ({ _id: z._id, name: z.name, fee: z.fee, minOrder: z.minOrder, etaMinutes: z.etaMinutes, hours: z.hours })),
@@ -69,37 +63,39 @@ publicRouter.get('/storefront', ah(async (req, res) => {
 
 publicRouter.get('/menu', ah(async (req, res) => {
   const tz = req.tenant!.settings?.timezone ?? 'UTC';
+  // The WHOLE published menu, at any hour: every active category and every non-archived dish. Serving hours only
+  // decide whether a dish can be ordered now (availability below; enforced again when an order is placed).
+  // Only an owner's own switch hides content: an inactive category (and its subcategories).
   const allActive = await Category.find({ tenantId: req.tenantId, isActive: true }).sort({ sortOrder: 1 }).lean();
-  const cats = allActive.filter((c) => categoryVisibleNow(c.schedule as any, tz));
-  const visibleIds = new Set(cats.map((c) => String(c._id)));
-  // Subcategory hidden if its parent is hidden.
-  const categories = cats.filter((c) => !c.parentId || visibleIds.has(String(c.parentId)));
-  const catIds = categories.map((c) => c._id);
-  const products = await Product.find({ tenantId: req.tenantId, isArchived: false, categoryId: { $in: catIds } })
+  const activeIds = new Set(allActive.map((c) => String(c._id)));
+  const categoriesRaw = allActive.filter((c) => !c.parentId || activeIds.has(String(c.parentId)));
+  const catById = new Map(categoriesRaw.map((c) => [String(c._id), c]));
+  const now = scheduleClock.now();
+  const categories = categoriesRaw.map((c) => {
+    const s = effectiveSchedule({}, c as any, c.parentId ? (catById.get(String(c.parentId)) as any) : null);
+    return { ...c, availability: availabilityAt(s, tz, now) };
+  });
+  const products = await Product.find({ tenantId: req.tenantId, isArchived: false, categoryId: { $in: categoriesRaw.map((c) => c._id) } })
     .select('-recipe -tenantId')
     .sort({ sortOrder: 1, createdAt: -1 })
     .lean();
-  // Categories that have dishes but are outside their serving hours right now. The storefront shows their hours
-  // instead of "the menu is being prepared", which is reserved for a restaurant with no dishes at all.
-  const visible = new Set(categories.map((c) => String(c._id)));
-  const withDishes = new Set((await Product.distinct('categoryId', { tenantId: req.tenantId, isArchived: false })).map(String));
-  const closedNow = allActive
-    .filter((c) => !c.parentId && !visible.has(String(c._id)))
-    .filter((c) => withDishes.has(String(c._id)) || allActive.some((s) => String(s.parentId) === String(c._id) && withDishes.has(String(s._id))))
-    .map((c) => ({ _id: c._id, name: c.name, schedule: c.schedule }));
   res.json({
     categories,
-    closedNow,
     // Only what a guest can actually choose; inventory links stay private. Prices shown here come from the same
     // rules the server charges with (lib/menuPricing.ts); the order itself is re-priced on the server.
     products: products.map((p: any) => {
       const strip = ({ ingredient: _i, ...o }: any) => o;
       const noOptionLeft = (p.variants?.length ?? 0) > 0 && variantIsRequired(p) && activeVariants(p).length === 0;
+      const soldOut = !p.isAvailable || (p.trackStock && p.stockQty <= 0) || noOptionLeft;
+      const cat: any = catById.get(String(p.categoryId));
+      const hours = availabilityAt(effectiveSchedule(p, cat, cat?.parentId ? (catById.get(String(cat.parentId)) as any) : null), tz, now);
       return {
         ...p,
         effectivePrice: effectivePrice(p),
         displayPrice: displayPrice(p),
-        soldOut: !p.isAvailable || (p.trackStock && p.stockQty <= 0) || noOptionLeft,
+        soldOut,
+        // Orderable right now? 'unavailable' = owner switched it off or sold out; 'closed' = outside serving hours.
+        availability: { isAvailableNow: !soldOut && hours.openNow, reason: soldOut ? 'unavailable' : hours.openNow ? 'open' : 'closed', nextAvailableAt: soldOut ? null : hours.nextOpenAt, schedule: hours.schedule },
         stockQty: undefined,
         variants: activeVariants(p).map(({ recipeMultiplier: _m, ...v }: any) => v),
         addons: p.addons.filter((a: any) => a.isAvailable).map(strip),

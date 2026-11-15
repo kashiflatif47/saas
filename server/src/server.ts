@@ -3,6 +3,7 @@ import path from 'node:path';
 import mongoose from 'mongoose';
 import { env } from './config/env';
 import { connectDb } from './db/connect';
+import { storageStatus } from './services/media';
 import { createApp } from './app';
 import { initSockets } from './sockets';
 import { startSubscriptionJob } from './jobs/subscriptions';
@@ -22,6 +23,10 @@ async function main() {
     // deployment replaces it; the records keep pointing at files that no longer exist.
     console.warn(`[BOOT] UPLOAD_DIR="${env.UPLOAD_DIR}" resolves to ${path.resolve(env.UPLOAD_DIR)} (inside the app). Set UPLOAD_DIR to an absolute folder outside the deployment so uploads survive redeploys.`);
   }
+  // Permanent media storage: say plainly where new uploads go (never secrets).
+  const media = await storageStatus();
+  if (media.defaultProvider) console.info(`[BOOT] image uploads go to: ${media.defaultProvider}${media.defaultProvider === 'local' && !media.local.persistent ? ' (development folder)' : ''}`);
+  else console.warn('[BOOT] no permanent image storage configured: uploads are refused until Cloudinary or S3-compatible storage is set up (platform console → Storage, or CLOUDINARY_* / S3_* variables). Linked https images still work.');
   const app = createApp();
   const server = http.createServer(app);
   const io = initSockets(server);

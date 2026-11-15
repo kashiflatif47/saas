@@ -30,6 +30,8 @@ import { syncRouter } from './routes/sync';
 import { webhooksRouter } from './routes/webhooks';
 import { intelligenceRouter, marketingRouter, deliveryRouter } from './routes/growth';
 import { Payment } from './models/operations';
+import { assetsRouter } from './routes/assets';
+import { getAssetUrl } from './services/media';
 import { ah } from './lib/errors';
 
 export function createApp() {
@@ -66,7 +68,8 @@ export function createApp() {
           scriptSrc: ["'self'", 'https://js.stripe.com'],
           frameSrc: ['https://js.stripe.com', 'https://hooks.stripe.com'],
           connectSrc: ["'self'", 'wss:', 'https://api.stripe.com', 'https://fonts.googleapis.com', 'https://fonts.gstatic.com'], // fonts: fetched by the PWA service worker
-          imgSrc: ["'self'", 'data:', 'blob:'],
+          // https: images from Cloudinary, S3/R2/CDN buckets and owner-linked https images (never http:, javascript: etc.).
+          imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
           styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
           fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
           workerSrc: ["'self'"],
@@ -91,6 +94,19 @@ export function createApp() {
 
   // Uploaded images (tenant-namespaced). In production, serve from object storage/CDN instead.
   app.use('/uploads', express.static(path.resolve(env.UPLOAD_DIR), { maxAge: isProd ? '30d' : 0, index: false, dotfiles: 'deny' }));
+
+  /*
+   * Stable image addresses. Records store /media/<assetId>; this sends the browser to wherever the image currently
+   * lives (Cloudinary, S3/R2/CDN, a signed link for a private bucket, a linked https image, or legacy /uploads).
+   * Moving an image to another provider changes the target, never the address.
+   */
+  app.get('/media/:id', ah(async (req, res) => {
+    const target = await getAssetUrl(String(req.params.id));
+    if (!target) return void res.status(404).type('text/plain').send('Image not found');
+    const signed = target.includes('X-Amz-Signature=');
+    res.setHeader('Cache-Control', signed ? 'private, max-age=300' : 'public, max-age=3600');
+    res.redirect(302, target);
+  }));
 
   app.get('/api/health', (_req, res) => {
     const dbState = mongoose.connection.readyState; // 1 = connected
@@ -136,6 +152,7 @@ export function createApp() {
   staff.use('/intelligence', intelligenceRouter);
   staff.use('/marketing', marketingRouter);
   staff.use('/delivery', deliveryRouter);
+  staff.use('/assets', assetsRouter);
   staff.get('/payments', can('payments:collect', 'analytics:view'), validateQuery(zPage.extend({ status: z.string().optional(), kind: z.string().optional(), method: z.string().optional() })), ah(async (req, res) => {
     const q = (req as any).validQuery;
     const filter: any = { tenantId: req.tenantId };
@@ -177,7 +194,7 @@ export function createApp() {
       res.setHeader('Cache-Control', 'no-cache');
       res.type('application/manifest+json').send(JSON.stringify({ ...base, id: `/r/${slug}/`, start_url: `/r/${slug}/`, scope: '/', name: `${tenant.name} — TableSaaS`, short_name: tenant.name.slice(0, 30) }));
     }));
-    app.get(/^\/(?!api\/|socket\.io\/|uploads\/).*/, ah(async (req, res) => {
+    app.get(/^\/(?!api\/|socket\.io\/|uploads\/|media\/).*/, ah(async (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       // Restaurant pages (/r/<slug>/…): the SPA renders its own "restaurant not found" page, but the HTTP status
       // must say 404 too (search engines, monitors). Suspended/lapsed restaurants still get 200: the app shows

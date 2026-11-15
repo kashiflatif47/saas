@@ -3,6 +3,9 @@ import { Category, KitchenStation, Product } from '../models/menu';
 import { Counter, Coupon, Customer, Order, Table } from '../models/operations';
 import { priceOrder, type CouponInput, type ManualDiscountInput, type PricedLine, type PricingLineInput } from '../lib/pricing';
 import { resolveSelection, SelectionError, type ItemSelection, type ResolvedSelection } from '../lib/menuPricing';
+import { effectiveSchedule, isOpenAt, nextOpenAt, scheduleClock } from '../lib/schedule';
+
+const formatLocal = (d: Date, tz: string) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
 import { canTransition, canTransitionItem, deriveOrderStatus, type ItemStatus, type OrderStatus } from '../lib/orderState';
 import { randomToken } from '../lib/crypto';
 import { AppError, badRequest, conflict, forbidden, notFound } from '../lib/errors';
@@ -132,7 +135,9 @@ export async function prepareOrder(tenant: ResolvedTenant, input: PlaceOrderInpu
     if (!input.discountReason || input.discountReason.trim().length < 3) throw badRequest('A reason is required for manual discounts');
   }
 
-  const { lines, byId } = await buildLines(tenantId, input.items);
+  // Guests (storefront, checkout, table QR) can only order dishes inside their serving hours. Staff orders (POS,
+  // waiter) are not restricted, exactly as before.
+  const { lines, byId } = await buildLines(tenantId, input.items, source === 'staff' ? {} : { servingHoursTz: tenant.settings?.timezone ?? 'UTC' });
 
   /* 3. Coupon + server-side pricing */
   let couponDoc: Awaited<ReturnType<typeof loadCoupon>> = null;
@@ -172,14 +177,17 @@ export async function prepareOrder(tenant: ResolvedTenant, input: PlaceOrderInpu
 }
 
 /** Loads products strictly from this tenant and builds priced-ready lines (availability, options, stations). */
-export async function buildLines(tenantId: Types.ObjectId, items: PlaceOrderInput['items']) {
+export async function buildLines(tenantId: Types.ObjectId, items: PlaceOrderInput['items'], opts: { servingHoursTz?: string } = {}) {
   /* 2. Load products strictly from this tenant */
   const ids = [...new Set(items.map((i) => i.productId))];
   const products = await Product.find({ tenantId, _id: { $in: ids }, isArchived: false }).lean();
   if (products.length !== ids.length) throw badRequest('One or more items are no longer available');
   const byId = new Map<string, any>(products.map((p) => [String(p._id), p]));
-  const cats = await Category.find({ tenantId, _id: { $in: products.map((p) => p.categoryId) } }).select('isActive stationId').lean();
-  const catById = new Map<string, any>(cats.map((c) => [String(c._id), c]));
+  const cats = await Category.find({ tenantId, _id: { $in: products.map((p) => p.categoryId) } }).select('isActive stationId schedule parentId').lean();
+  const parentIds = cats.map((c) => c.parentId).filter(Boolean);
+  const parents = parentIds.length ? await Category.find({ tenantId, _id: { $in: parentIds } }).select('schedule').lean() : [];
+  const catById = new Map<string, any>([...parents, ...cats].map((c) => [String(c._id), c]));
+  const now = scheduleClock.now();
   const defaultStation = await KitchenStation.findOne({ tenantId, isDefault: true, isActive: true }).select('_id').lean();
 
   const lines: PreparedLine[] = [];
@@ -187,6 +195,14 @@ export async function buildLines(tenantId: Types.ObjectId, items: PlaceOrderInpu
     const p = byId.get(it.productId)!;
     const cat = catById.get(String(p.categoryId));
     if (!p.isAvailable || !cat?.isActive) throw badRequest(`${p.name.en} is currently unavailable`);
+    if (opts.servingHoursTz) {
+      // Serving hours are checked here on the server; a browser's "available" flag is never trusted.
+      const schedule = effectiveSchedule(p as any, cat, cat?.parentId ? catById.get(String(cat.parentId)) : null);
+      if (!isOpenAt(schedule, opts.servingHoursTz, now)) {
+        const next = nextOpenAt(schedule, opts.servingHoursTz, now);
+        throw new AppError(409, `${p.name.en} is not being served right now${next ? ` (available again ${formatLocal(next, opts.servingHoursTz)})` : ''}`, 'NOT_SERVING_NOW', { productId: String(p._id), nextAvailableAt: next?.toISOString() ?? null });
+      }
+    }
     // One rule set for every channel (storefront, QR, POS, staff, offline sync): see lib/menuPricing.ts.
     let resolved: ResolvedSelection;
     try {
